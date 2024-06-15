@@ -1,8 +1,10 @@
-use crate::data::log_record::LogRecordPosition;
-use crate::index::Indexer;
-use parking_lot::RwLock;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+
+use parking_lot::RwLock;
+
+use crate::data::log_record::LogRecordPosition;
+use crate::index::Indexer;
 
 /// BTree Indexer
 pub struct BTree {
