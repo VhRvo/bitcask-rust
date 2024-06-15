@@ -18,7 +18,7 @@ pub struct DataFile {
 
 impl DataFile {
     /// 创建或打开一个新的数据文件
-    pub fn new(dir_path: PathBuf, file_id: u32) -> Result<DataFile> {
+    pub fn new(__dir_path: PathBuf, __file_id: u32) -> Result<DataFile> {
         todo!()
     }
 
@@ -34,11 +34,11 @@ impl DataFile {
         *self.file_id.read()
     }
 
-    pub fn read_log_record(&self, offset: u64) -> Result<LogRecord> {
+    pub fn read_log_record(&self, __offset: u64) -> Result<LogRecord> {
         todo!()
     }
 
-    pub fn write(&self, but: &[u8]) -> Result<()> {
+    pub fn write(&self, __buf: &[u8]) -> Result<()> {
         todo!()
     }
 

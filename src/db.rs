@@ -92,9 +92,9 @@ impl Engine {
             // 将旧的数据文件存储到 map 中
             let mut older_files = self.older_files.write();
             let old_file = DataFile::new(dir_path.clone(), current_fid)?;
-            older_files.insert(current_fid, active_file.take());
+            older_files.insert(current_fid, old_file);
             // 打开新的数据文件
-            let new_file = DataFile::new(dir_path.clone(), current_fid + 1)?;
+            let new_file = DataFile::new(dir_path, current_fid + 1)?;
             *active_file = new_file;
         }
 
