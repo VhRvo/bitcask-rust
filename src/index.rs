@@ -1,6 +1,7 @@
-mod btree;
-
 use crate::data::log_record::LogRecordPosition;
+
+pub mod btree;
+pub mod skiplist;
 
 /// The abstract index interface
 pub trait Indexer: Sync + Send {

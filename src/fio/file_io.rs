@@ -7,10 +7,10 @@ use std::sync::Arc;
 use log::error;
 use parking_lot::RwLock;
 
-use crate::errors::Errors::{
+use crate::error::Error::{
     FailedToOpenDataFile, FailedToReadFromDataFile, FailedToSyncDataFile, FailedToWriteIntoDataFile,
 };
-use crate::errors::Result;
+use crate::error::Result;
 use crate::fio::IOManager;
 
 pub struct FileIO {
@@ -37,21 +37,18 @@ impl FileIO {
 impl IOManager for FileIO {
     fn read(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
         let read_guard = self.file_id.read();
-        // let result =
         read_guard.read_at(buf, offset).map_err(|e| {
             error!("read from data file error {}", e);
             FailedToReadFromDataFile
         })
-        // ; Ok(result)
     }
 
     fn write(&self, but: &[u8]) -> Result<usize> {
         let mut write_guard = self.file_id.write();
-        let result = write_guard.write(but).map_err(|e| {
+        write_guard.write(but).map_err(|e| {
             error!("write to data file error {}", e);
             FailedToWriteIntoDataFile
-        })?;
-        Ok(result)
+        })
     }
 
     fn sync(&self) -> Result<()> {
@@ -66,9 +63,10 @@ impl IOManager for FileIO {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs;
     use std::path::PathBuf;
+
+    use super::*;
 
     #[test]
     fn test_file_io_write() {

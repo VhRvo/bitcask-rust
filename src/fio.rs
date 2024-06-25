@@ -1,6 +1,6 @@
-pub(crate) mod file_io;
+use crate::error::Result;
 
-use crate::errors::Result;
+pub(crate) mod file_io;
 
 /// IOManager
 pub trait IOManager: Sync + Send {

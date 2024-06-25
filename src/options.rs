@@ -6,4 +6,11 @@ pub struct Options {
     /// size of database
     pub data_file_size: u64,
     pub sync_writes: bool,
+    pub index_type: IndexType,
+}
+
+#[derive(Copy, Clone)]
+pub enum IndexType {
+    BTree,
+    SkipList,
 }

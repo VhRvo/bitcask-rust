@@ -3,9 +3,11 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::data::log_record::LogRecord;
-use crate::errors::Result;
+use crate::data::log_record::ReadLogRecord;
+use crate::error::Result;
 use crate::fio;
+
+pub const DATA_FILE_NAME_SUFFIX: &str = ".data";
 
 /// 数据文件
 pub struct DataFile {
@@ -28,13 +30,18 @@ impl DataFile {
         *self.write_offset.read()
     }
 
+    pub fn set_write_offset(&self, offset: u64) {
+        let mut write_guard = self.write_offset.write();
+        *write_guard = offset;
+    }
+
     pub fn get_file_id(&self) -> u32 {
         // let read_guard = self.file_id.read();
         // *read_guard
         *self.file_id.read()
     }
 
-    pub fn read_log_record(&self, __offset: u64) -> Result<LogRecord> {
+    pub fn read_log_record(&self, __offset: u64) -> Result<ReadLogRecord> {
         todo!()
     }
 
