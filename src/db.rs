@@ -1,4 +1,3 @@
-use std::cmp::PartialEq;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -8,16 +7,14 @@ use bytes::Bytes;
 use log::warn;
 use parking_lot::RwLock;
 
-use crate::data::{data_file, log_record};
 use crate::data::data_file::{DATA_FILE_NAME_SUFFIX, DataFile};
 use crate::data::log_record::{LogRecord, LogRecordPosition, LogRecordType, ReadLogRecord};
-use crate::error::{Error, Result};
 use crate::error::Error::{
     DataDirectoryMaybeCorrupted, DataFileSizeIsTooSmall, DirPathIsEmpty,
     FailedToCreateDatabaseDirectory, FailedToFindDataFile, FailedToReadDataBaseDirectory,
     FailedToUpdateIndex, KeyIsEmpty, KeyIsNotFound, ReadDataFileEof,
 };
-use crate::index;
+use crate::error::Result;
 use crate::index::{btree, Indexer, skiplist};
 use crate::options::{IndexType, Options};
 
@@ -54,7 +51,7 @@ impl Engine {
         // 加载数据文件
         let mut data_files = load_data_files(dir_path)?;
         // 设置 file id 信息
-        let mut file_ids = data_files
+        let file_ids = data_files
             .iter()
             .map(|data_file| data_file.get_file_id())
             .collect();

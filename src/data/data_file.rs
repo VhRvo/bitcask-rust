@@ -80,7 +80,7 @@ impl DataFile {
                 dbg!(__offset + actual_header_size as u64),
             )?;
 
-            let mut log_record = LogRecord {
+            let log_record = LogRecord {
                 key: key_value_crc_buffer.get(..key_size).unwrap().to_vec(),
                 value: key_value_crc_buffer
                     .get(key_size..key_value_crc_buffer.len() - 4)
@@ -133,24 +133,15 @@ mod tests {
         let dir_path = std::env::temp_dir();
         println!("temp directory: {:?}", dir_path.as_os_str());
 
-        {
-            let data_file_result = DataFile::new(dir_path.clone(), 0);
+        let insert = |file_id| {
+            let data_file_result = DataFile::new(dir_path.clone(), file_id);
             assert!(data_file_result.is_ok());
             let data_file = data_file_result.unwrap();
-            assert_eq!(data_file.get_file_id(), 0);
-        }
-        {
-            let data_file_result = DataFile::new(dir_path.clone(), 0);
-            assert!(data_file_result.is_ok());
-            let data_file = data_file_result.unwrap();
-            assert_eq!(data_file.get_file_id(), 0);
-        }
-        {
-            let data_file_result = DataFile::new(dir_path.clone(), 660);
-            assert!(data_file_result.is_ok());
-            let data_file = data_file_result.unwrap();
-            assert_eq!(data_file.get_file_id(), 660);
-        }
+            assert_eq!(data_file.get_file_id(), file_id);
+        };
+        insert(0);
+        insert(0);
+        insert(660);
     }
 
     #[test]
@@ -162,21 +153,15 @@ mod tests {
         let data_file = data_file_result.unwrap();
         assert_eq!(data_file.get_file_id(), 100);
 
+        let insert = |value: &str|
         {
-            let write_result = data_file.write("aaa".as_bytes());
+            let write_result = data_file.write(value.as_bytes());
             assert!(write_result.is_ok());
             assert_eq!(write_result.unwrap(), 3);
-        }
-        {
-            let write_result = data_file.write("bbb".as_bytes());
-            assert!(write_result.is_ok());
-            assert_eq!(write_result.unwrap(), 3);
-        }
-        {
-            let write_result = data_file.write("ccc".as_bytes());
-            assert!(write_result.is_ok());
-            assert_eq!(write_result.unwrap(), 3);
-        }
+        };
+        insert("aaa");
+        insert("bbb");
+        insert("ccc");
     }
 
     #[test]
@@ -252,7 +237,7 @@ mod tests {
             // 从起始位置开始
             let read_result = data_file.read_log_record(first_offset + second_offset);
             assert!(read_result.is_ok());
-            let ReadLogRecord { log_record, size } = read_result.unwrap();
+            let ReadLogRecord { log_record, size: _ } = read_result.unwrap();
             assert_eq!(3993316699, log_record.get_crc());
             assert_eq!(encoded.key, log_record.key);
             assert_eq!(encoded.value, log_record.value);
