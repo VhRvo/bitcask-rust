@@ -35,17 +35,17 @@ impl FileIO {
 }
 
 impl IOManager for FileIO {
-    fn read(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
+    fn read(&self, buffer: &mut [u8], offset: u64) -> Result<usize> {
         let read_guard = self.file_id.read();
-        read_guard.read_at(buf, offset).map_err(|e| {
+        read_guard.read_at(buffer, offset).map_err(|e| {
             error!("read from data file error {}", e);
             FailedToReadFromDataFile
         })
     }
 
-    fn write(&self, but: &[u8]) -> Result<usize> {
+    fn write(&self, buffer: &[u8]) -> Result<usize> {
         let mut write_guard = self.file_id.write();
-        write_guard.write(but).map_err(|e| {
+        write_guard.write(buffer).map_err(|e| {
             error!("write to data file error {}", e);
             FailedToWriteIntoDataFile
         })

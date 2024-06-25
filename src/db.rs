@@ -59,6 +59,9 @@ impl Engine {
             .map(|data_file| data_file.get_file_id())
             .collect();
 
+        // 将文件按照从大到小排列
+        data_files.reverse();
+
         let mut older_files = HashMap::new();
         if data_files.len() > 1 {
             // 将旧的数据文件保存到 older_files 中
@@ -251,11 +254,11 @@ impl Engine {
                 }
 
                 // 设置活跃文件的 offset
-                if ii == self.file_ids.len() - 1 {};
-                todo!()
+                if ii == self.file_ids.len() - 1 {
+                    active_file.set_write_offset(offset)
+                };
             }
-
-            todo!()
+            Ok(())
         }
     }
 }

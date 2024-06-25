@@ -60,7 +60,7 @@ impl DataFile {
     pub fn read_log_record(&self, __offset: u64) -> Result<ReadLogRecord> {
         // 先读取出 header 部分的数据
         let mut header_buffer = BytesMut::zeroed(max_log_record_header_size());
-        self.io_manager.read(&mut header_buffer, __offset)?;
+        self.io_manager.read(&mut header_buffer, dbg!(__offset))?;
         // 取出 Type，在第一个字节
         let record_type = header_buffer.get_u8();
         // 取出 key 和 value 的长度
@@ -77,7 +77,7 @@ impl DataFile {
             let mut key_value_crc_buffer = BytesMut::zeroed(key_size + value_size + 4);
             self.io_manager.read(
                 &mut key_value_crc_buffer,
-                __offset + actual_header_size as u64,
+                dbg!(__offset + actual_header_size as u64),
             )?;
 
             let mut log_record = LogRecord {
@@ -124,6 +124,8 @@ fn get_data_file_name(path: PathBuf, file_id: u32) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use crate::data::log_record::LogRecordType::{DELETED, NORMAL};
+
     use super::*;
 
     #[test]
@@ -188,5 +190,73 @@ mod tests {
 
         let sync_result = data_file.sync();
         assert!(sync_result.is_ok());
+    }
+
+    #[test]
+    fn test_data_file_read_log_record() {
+        let dir_path = std::env::temp_dir();
+        println!("temp directory: {:?}", dir_path.as_os_str());
+        let data_file_result = DataFile::new(dir_path.clone(), 800);
+        assert!(data_file_result.is_ok());
+        let data_file = data_file_result.unwrap();
+        assert_eq!(data_file.get_file_id(), 800);
+
+        let first_offset = {
+            let encoded = LogRecord {
+                key: "name".as_bytes().to_vec(),
+                value: "bit-cask-rust-kv".as_bytes().to_vec(),
+                record_type: NORMAL,
+            };
+            let write_result = data_file.write(&encoded.encode());
+            assert!(write_result.is_ok());
+
+            // 从起始位置开始
+            let read_result = data_file.read_log_record(0);
+            assert!(read_result.is_ok());
+            let ReadLogRecord { log_record, size } = read_result.unwrap();
+            assert_eq!(1886608881, log_record.get_crc());
+            assert_eq!(encoded.key, log_record.key);
+            assert_eq!(encoded.value, log_record.value);
+            assert_eq!(encoded.record_type, log_record.record_type);
+            size
+        };
+        let second_offset = {
+            let encoded = LogRecord {
+                key: "name_id".as_bytes().to_vec(),
+                value: "new-value".as_bytes().to_vec(),
+                record_type: NORMAL,
+            };
+            let write_result = data_file.write(&encoded.encode());
+            assert!(write_result.is_ok());
+
+            // 从新的位置开始
+            let read_result = data_file.read_log_record(dbg!(first_offset));
+            assert!(read_result.is_ok());
+            let ReadLogRecord { log_record, size } = read_result.unwrap();
+            assert_eq!(3220692689, log_record.get_crc());
+            assert_eq!(encoded.key, log_record.key);
+            assert_eq!(encoded.value, log_record.value);
+            assert_eq!(encoded.record_type, log_record.record_type);
+            size
+        };
+        {
+            // 类型是 Deleted
+            let encoded = LogRecord {
+                key: "name".as_bytes().to_vec(),
+                value: Default::default(),
+                record_type: DELETED,
+            };
+            let write_result = data_file.write(&encoded.encode());
+            assert!(write_result.is_ok());
+
+            // 从起始位置开始
+            let read_result = data_file.read_log_record(first_offset + second_offset);
+            assert!(read_result.is_ok());
+            let ReadLogRecord { log_record, size } = read_result.unwrap();
+            assert_eq!(3993316699, log_record.get_crc());
+            assert_eq!(encoded.key, log_record.key);
+            assert_eq!(encoded.value, log_record.value);
+            assert_eq!(encoded.record_type, log_record.record_type);
+        }
     }
 }
