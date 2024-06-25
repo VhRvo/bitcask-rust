@@ -15,7 +15,7 @@ use crate::error::{Error, Result};
 use crate::error::Error::{
     DataDirectoryMaybeCorrupted, DataFileSizeIsTooSmall, DirPathIsEmpty,
     FailedToCreateDatabaseDirectory, FailedToFindDataFile, FailedToReadDataBaseDirectory,
-    FailedToUpdateIndex, KeyIsEmpty, KeyIsNotFound, ReadDataFileEOF,
+    FailedToUpdateIndex, KeyIsEmpty, KeyIsNotFound, ReadDataFileEof,
 };
 use crate::index;
 use crate::index::{btree, Indexer, skiplist};
@@ -54,10 +54,10 @@ impl Engine {
         // 加载数据文件
         let mut data_files = load_data_files(dir_path)?;
         // 设置 file id 信息
-        let mut file_ids = Vec::new();
-        for data_file in data_files.iter() {
-            file_ids.push(data_file.get_file_id());
-        }
+        let mut file_ids = data_files
+            .iter()
+            .map(|data_file| data_file.get_file_id())
+            .collect();
 
         let mut older_files = HashMap::new();
         if data_files.len() > 1 {
@@ -223,7 +223,7 @@ impl Engine {
                     let ReadLogRecord { log_record, size } = match read_log_record_result {
                         Ok(result) => result,
                         Err(err) => {
-                            if err == ReadDataFileEOF {
+                            if err == ReadDataFileEof {
                                 break;
                             }
                             return Err(err);

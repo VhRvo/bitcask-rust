@@ -1,4 +1,7 @@
+use std::path::PathBuf;
+
 use crate::error::Result;
+use crate::fio::file_io::FileIO;
 
 pub(crate) mod file_io;
 
@@ -10,4 +13,9 @@ pub trait IOManager: Sync + Send {
     fn write(&self, but: &[u8]) -> Result<usize>;
     /// Persistence of data
     fn sync(&self) -> Result<()>;
+}
+
+/// 根据文件名初始化 IOManager
+pub fn new_io_manager(file_name: PathBuf) -> Result<impl IOManager> {
+    FileIO::new(file_name)
 }

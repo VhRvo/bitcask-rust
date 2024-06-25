@@ -31,7 +31,9 @@ pub enum Error {
     #[error("the data directory maybe corrupted")]
     DataDirectoryMaybeCorrupted,
     #[error("read data file EOF")]
-    ReadDataFileEOF,
+    ReadDataFileEof,
+    #[error("invalid crc value, log record maybe corrupted")]
+    InvalidRecordCrc,
 }
 
 pub type Result<T> = result::Result<T, Error>;
