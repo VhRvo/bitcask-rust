@@ -15,8 +15,12 @@ use crate::error::Error::{
     FailedToUpdateIndex, KeyIsEmpty, KeyIsNotFound, ReadDataFileEof,
 };
 use crate::error::Result;
-use crate::index::{btree, Indexer, skiplist};
-use crate::options::{IndexType, Options};
+use crate::index::Indexer;
+use crate::index::new_indexer;
+use crate::options::Options;
+
+#[cfg(test)]
+mod tests;
 
 const INITIAL_FILE_ID: u32 = 0;
 
@@ -306,12 +310,4 @@ fn load_data_files(dir_path: &Path) -> Result<Vec<DataFile>> {
         data_files.push(DataFile::new(PathBuf::from(dir_path), file_id)?);
     }
     Ok(data_files)
-}
-
-/// 根据类型打开内存索引
-pub fn new_indexer(index_type: IndexType) -> Box<dyn Indexer> {
-    match index_type {
-        IndexType::BTree => Box::new(btree::BTree::new()),
-        IndexType::SkipList => Box::new(skiplist::SkipList::new()),
-    }
 }

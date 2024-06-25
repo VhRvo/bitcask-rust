@@ -77,7 +77,7 @@ impl DataFile {
             let mut key_value_crc_buffer = BytesMut::zeroed(key_size + value_size + 4);
             self.io_manager.read(
                 &mut key_value_crc_buffer,
-                dbg!(__offset + actual_header_size as u64),
+                __offset + actual_header_size as u64,
             )?;
 
             let log_record = LogRecord {
@@ -153,8 +153,7 @@ mod tests {
         let data_file = data_file_result.unwrap();
         assert_eq!(data_file.get_file_id(), 100);
 
-        let insert = |value: &str|
-        {
+        let insert = |value: &str| {
             let write_result = data_file.write(value.as_bytes());
             assert!(write_result.is_ok());
             assert_eq!(write_result.unwrap(), 3);
@@ -237,7 +236,10 @@ mod tests {
             // 从起始位置开始
             let read_result = data_file.read_log_record(first_offset + second_offset);
             assert!(read_result.is_ok());
-            let ReadLogRecord { log_record, size: _ } = read_result.unwrap();
+            let ReadLogRecord {
+                log_record,
+                size: _,
+            } = read_result.unwrap();
             assert_eq!(3993316699, log_record.get_crc());
             assert_eq!(encoded.key, log_record.key);
             assert_eq!(encoded.value, log_record.value);

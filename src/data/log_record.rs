@@ -4,6 +4,7 @@ use prost::{encode_length_delimiter, length_delimiter_len};
 /// The information of data position, describes which position the data stored
 /// 数据位置索引信息，描述数据存储到哪个位置
 #[derive(Copy, Clone, Debug)]
+#[derive(Eq, Ord, PartialEq, PartialOrd)]
 pub struct LogRecordPosition {
     // 表示数据的存放文件
     pub(crate) file_id: u32,

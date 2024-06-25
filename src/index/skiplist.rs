@@ -1,5 +1,6 @@
 use crate::data::log_record::LogRecordPosition;
-use crate::index::Indexer;
+use crate::index::{Indexer, IndexIterator};
+use crate::options::IteratorOptions;
 
 pub struct SkipList {}
 
@@ -19,6 +20,10 @@ impl Indexer for SkipList {
     }
 
     fn delete(&self, __key: Vec<u8>) -> bool {
+        todo!()
+    }
+
+    fn iterator(&self, _options: IteratorOptions) -> Box<dyn IndexIterator> {
         todo!()
     }
 }

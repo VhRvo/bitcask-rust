@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+#[derive(Clone)]
 pub struct Options {
     /// directory of database
     pub dir_path: PathBuf,
@@ -22,6 +23,20 @@ impl Default for Options {
             data_file_size: 256 * 1024 * 1024,
             sync_writes: false,
             index_type: IndexType::BTree,
+        }
+    }
+}
+
+pub struct IteratorOptions {
+    pub prefix: Vec<u8>,
+    pub reverse: bool,
+}
+
+impl Default for IteratorOptions {
+    fn default() -> Self {
+        Self {
+            prefix: Default::default(),
+            reverse: false,
         }
     }
 }
