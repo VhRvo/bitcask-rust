@@ -1,4 +1,7 @@
+use bytes::Bytes;
+
 use crate::data::log_record::LogRecordPosition;
+use crate::error::Result;
 use crate::options::{IndexType, IteratorOptions};
 
 pub mod btree;
@@ -14,6 +17,7 @@ pub trait Indexer: Sync + Send {
     fn delete(&self, key: Vec<u8>) -> bool;
     /// Return an iterator
     fn iterator(&self, options: IteratorOptions) -> Box<dyn IndexIterator>;
+    fn list_keys(&self) -> Result<Vec<Bytes>>;
 }
 
 /// 根据类型打开内存索引

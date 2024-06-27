@@ -3,8 +3,7 @@ use prost::{encode_length_delimiter, length_delimiter_len};
 
 /// The information of data position, describes which position the data stored
 /// 数据位置索引信息，描述数据存储到哪个位置
-#[derive(Copy, Clone, Debug)]
-#[derive(Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct LogRecordPosition {
     // 表示数据的存放文件
     pub(crate) file_id: u32,
@@ -18,6 +17,8 @@ pub enum LogRecordType {
     NORMAL = 1,
     // 被删除数据的标识，墓碑值
     DELETED = 2,
+    // 事务完成的标记
+    TxnFINISHED = 3,
 }
 
 impl LogRecordType {
@@ -25,6 +26,7 @@ impl LogRecordType {
         match value {
             1 => LogRecordType::NORMAL,
             2 => LogRecordType::DELETED,
+            3 => LogRecordType::TxnFINISHED,
             _ => panic!("unknown log record type"),
         }
     }
@@ -78,7 +80,7 @@ impl LogRecord {
         hasher.update(&buffer);
         let crc = hasher.finalize();
         buffer.put_u32(crc);
-        println!("crc: {crc:}");
+        // println!("crc: {crc:}");
 
         (buffer.to_vec(), crc)
     }
@@ -89,6 +91,11 @@ impl LogRecord {
 pub struct ReadLogRecord {
     pub(crate) log_record: LogRecord,
     pub(crate) size: u64,
+}
+
+pub struct TransactionRecord {
+    pub(crate) record: LogRecord,
+    pub(crate) position: LogRecordPosition,
 }
 
 #[cfg(test)]

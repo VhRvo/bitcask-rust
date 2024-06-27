@@ -1,7 +1,7 @@
-use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use bytes::Bytes;
 use parking_lot::RwLock;
 
 use crate::data::log_record::LogRecordPosition;
@@ -53,6 +53,14 @@ impl Indexer for BTree {
             options,
         })
     }
+
+    fn list_keys(&self) -> crate::error::Result<Vec<Bytes>> {
+        let read_guard = self.tree.read();
+        Ok(read_guard
+            .iter()
+            .map(|(key, _)| Bytes::copy_from_slice(key))
+            .collect())
+    }
 }
 
 /// BTree 索引迭代器
@@ -68,27 +76,28 @@ impl IndexIterator for BTreeIterator {
     }
 
     fn seek(&mut self, key: Vec<u8>) {
-        let comparator: Box<dyn Fn(_) -> Ordering> = if self.options.reverse {
-            Box::new(|item: &(Vec<_>, LogRecordPosition)| item.0.cmp(&key).reverse())
+        let result = if self.options.reverse {
+            self.items
+                .binary_search_by(|item: &(Vec<_>, LogRecordPosition)| item.0.cmp(&key).reverse())
         } else {
-            Box::new(|item: &(Vec<_>, LogRecordPosition)| item.0.cmp(&key))
+            self.items
+                .binary_search_by(|item: &(Vec<_>, LogRecordPosition)| item.0.cmp(&key))
         };
-        let result = self.items.binary_search_by(comparator);
+        // let comparator: Box<dyn Fn(_) -> Ordering> = if self.options.reverse {
+        //     Box::new(|item: &(Vec<_>, LogRecordPosition)| item.0.cmp(&key).reverse())
+        // } else {
+        //     Box::new(|item: &(Vec<_>, LogRecordPosition)| item.0.cmp(&key))
+        // };
+        // let result = self.items.binary_search_by(comparator);
         self.current_index = result.unwrap_or_else(|index| index);
     }
 
     fn next(&mut self) -> Option<(&Vec<u8>, &LogRecordPosition)> {
         loop {
-            let item = self.items.get(self.current_index);
             self.current_index += 1;
-            if let Some(item) = item {
-                if item.0.starts_with(&self.options.prefix) {
-                    return Some((&item.0, &item.1));
-                } else {
-                    continue;
-                }
-            } else {
-                return None;
+            let item = self.items.get(self.current_index)?;
+            if item.0.starts_with(&self.options.prefix) {
+                return Some((&item.0, &item.1));
             }
         }
     }

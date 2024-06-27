@@ -167,4 +167,25 @@ mod tests {
             assert!(result.is_ok());
         }
     }
+
+    #[test]
+    fn repeat_open_one_file() {
+        let path = PathBuf::from("/tmp/new.data");
+        let file_handle1 = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .append(true)
+            .open(path.clone());
+        let file_handle2 = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .append(true)
+            .open(path);
+        println!("{:?}", file_handle1);
+        println!("{:?}", file_handle2);
+        file_handle1.unwrap().write("abc".as_bytes()).expect("failed to write");
+        file_handle2.unwrap().write("xyz".as_bytes()).expect("failed to write");
+    }
 }

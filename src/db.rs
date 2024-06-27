@@ -2,13 +2,19 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bytes::Bytes;
 use log::warn;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 
+use crate::batch::{
+    log_record_key_with_sequential_number, NON_TRANSACTION_SEQUENTIAL_NUMBER, parse_log_record_key,
+};
 use crate::data::data_file::{DATA_FILE_NAME_SUFFIX, DataFile};
-use crate::data::log_record::{LogRecord, LogRecordPosition, LogRecordType, ReadLogRecord};
+use crate::data::log_record::{
+    LogRecord, LogRecordPosition, LogRecordType, ReadLogRecord, TransactionRecord,
+};
 use crate::error::Error::{
     DataDirectoryMaybeCorrupted, DataFileSizeIsTooSmall, DirPathIsEmpty,
     FailedToCreateDatabaseDirectory, FailedToFindDataFile, FailedToReadDataBaseDirectory,
@@ -27,15 +33,21 @@ const INITIAL_FILE_ID: u32 = 0;
 /// Store engine
 /// bitcask 存储引擎实例结构体
 pub struct Engine {
-    options: Arc<Options>,
+    pub(crate) options: Arc<Options>,
     // 当前活跃数据文件
-    active_file: Arc<RwLock<DataFile>>,
+    pub(crate) active_file: Arc<RwLock<DataFile>>,
     // 旧的数据文件
-    older_files: Arc<RwLock<HashMap<u32, DataFile>>>,
+    pub(crate) older_files: Arc<RwLock<HashMap<u32, DataFile>>>,
     // 数据内存索引
-    index: Box<dyn Indexer>,
+    pub(crate) index: Box<dyn Indexer>,
     // 数据库启动时的文件 id，只用于加载索引时使用，不能用于其他地方的更新或使用
     file_ids: Vec<u32>,
+    // 事务提交保证串行化
+    pub(crate) batch_commit_lock: Mutex<()>,
+    // 事务序列号，全局递增
+    pub(crate) sequential_number: AtomicUsize,
+    // 防止多个线程同时 merge
+    pub(crate) merging_lock: Mutex<()>,
 }
 
 impl Engine {
@@ -83,13 +95,20 @@ impl Engine {
             older_files: Arc::new(RwLock::new(older_files)),
             index: new_indexer(index_type),
             file_ids,
+            batch_commit_lock: Mutex::new(()),
+            sequential_number: AtomicUsize::new(1),
+            merging_lock: Mutex::new(()),
         };
 
         // 从数据文件中加载索引
-        engine.load_index_from_data_files()?;
+        let current_sequential_number = engine.load_index_from_data_files()?;
+        engine
+            .sequential_number
+            .store(current_sequential_number + 1, Ordering::SeqCst);
 
         Ok(engine)
     }
+
     /// 存储 key/value 数据，key 不能为空
     pub fn put(&self, key: Bytes, value: Bytes) -> Result<()> {
         // 判断 key 的有效性
@@ -98,7 +117,10 @@ impl Engine {
         } else {
             // 构造 LogRecord
             let mut record = LogRecord {
-                key: key.to_vec(),
+                key: log_record_key_with_sequential_number(
+                    key.to_vec(),
+                    NON_TRANSACTION_SEQUENTIAL_NUMBER,
+                ),
                 value: value.to_vec(),
                 record_type: LogRecordType::NORMAL,
             };
@@ -123,7 +145,10 @@ impl Engine {
                 Ok(())
             } else {
                 let mut log_record = LogRecord {
-                    key: key.to_vec(),
+                    key: log_record_key_with_sequential_number(
+                        key.to_vec(),
+                        NON_TRANSACTION_SEQUENTIAL_NUMBER,
+                    ),
                     value: Default::default(),
                     record_type: LogRecordType::DELETED,
                 };
@@ -146,26 +171,34 @@ impl Engine {
             // 从内存索引中获取 key 对应的数据信息
             // 如果 key 不存在，直接返回
             let position = self.index.get(key.to_vec()).ok_or(KeyIsNotFound)?;
-            let active_file = self.active_file.read();
-            let older_file = self.older_files.read();
-            let log_record = if active_file.get_file_id() == position.file_id {
-                active_file.read_log_record(position.offset)?.log_record
-            } else {
-                let data_file = older_file
-                    .get(&position.file_id)
-                    .ok_or(FailedToFindDataFile)?;
-                data_file.read_log_record(position.offset)?.log_record
-            };
-            if log_record.record_type == LogRecordType::DELETED {
-                Err(KeyIsNotFound)
-            } else {
-                Ok(log_record.value.into())
-            }
+            // 根据位置索引，获取文件中的 key 对应的 value
+            self.get_by_position(position)
+        }
+    }
+
+    pub fn get_by_position(&self, position: LogRecordPosition) -> Result<Bytes> {
+        let active_file = self.active_file.read();
+        let older_file = self.older_files.read();
+        let log_record = if active_file.get_file_id() == position.file_id {
+            active_file.read_log_record(position.offset)?.log_record
+        } else {
+            let data_file = older_file
+                .get(&position.file_id)
+                .ok_or(FailedToFindDataFile)?;
+            data_file.read_log_record(position.offset)?.log_record
+        };
+        if log_record.record_type == LogRecordType::DELETED {
+            Err(KeyIsNotFound)
+        } else {
+            Ok(log_record.value.into())
         }
     }
 
     /// 追加写数据到当前活跃文件中
-    fn append_log_record(&self, log_record: &mut LogRecord) -> Result<LogRecordPosition> {
+    pub(crate) fn append_log_record(
+        &self,
+        log_record: &mut LogRecord,
+    ) -> Result<LogRecordPosition> {
         let dir_path = self.options.dir_path.as_path();
         // 编码输入数据
         let encoded_record = log_record.encode();
@@ -173,7 +206,6 @@ impl Engine {
 
         // 获取当前的活跃文件
         let mut active_file = self.active_file.write();
-        // let record_len = active_file.
 
         // 判断活跃文件是否达到写入阈值
         if active_file.get_write_offset() + record_len > self.options.data_file_size {
@@ -206,11 +238,17 @@ impl Engine {
 
     /// 从数据文件中加载内存索引
     /// 遍历数据文件中的内容，依次处理其中的记录
-    fn load_index_from_data_files(&mut self) -> Result<()> {
+    fn load_index_from_data_files(&mut self) -> Result<usize> {
+        // why don't directly mutate self?
+        let mut current_sequential_number = NON_TRANSACTION_SEQUENTIAL_NUMBER;
         // 如果数据文件为空，则直接返回
         if self.file_ids.is_empty() {
-            Ok(())
+            Ok(current_sequential_number)
         } else {
+            // 暂存事务相关的数据
+            let mut transaction_records: HashMap<usize, Vec<TransactionRecord>> =
+                HashMap::<usize, Vec<_>>::new();
+
             let active_file = self.active_file.read();
             let older_files = self.older_files.read();
 
@@ -226,12 +264,8 @@ impl Engine {
                     };
                     let ReadLogRecord { log_record, size } = match read_log_record_result {
                         Ok(result) => result,
-                        Err(err) => {
-                            if err == ReadDataFileEof {
-                                break;
-                            }
-                            return Err(err);
-                        }
+                        Err(err) if err == ReadDataFileEof => break,
+                        Err(err) => return Err(err),
                     };
 
                     // 构建内存索引
@@ -240,15 +274,32 @@ impl Engine {
                         offset,
                     };
 
-                    let update_success = match log_record.record_type {
-                        LogRecordType::NORMAL => {
-                            self.index.put(log_record.key.to_vec(), log_record_position)
+                    // 解析 key，拿到实际的 key 和 sequential number
+                    let (key, sequential_number) = parse_log_record_key(log_record.key);
+                    if sequential_number == NON_TRANSACTION_SEQUENTIAL_NUMBER {
+                        self.update_index(key, log_record.record_type, log_record_position)?;
+                    } else {
+                        if log_record.record_type == LogRecordType::TxnFINISHED {
+                            let records = transaction_records.remove(&sequential_number).unwrap();
+                            for record in records {
+                                self.update_index(
+                                    record.record.key,
+                                    record.record.record_type,
+                                    record.position,
+                                )?;
+                            }
+                        } else {
+                            let log_record = LogRecord { key, ..log_record };
+                            transaction_records
+                                .entry(sequential_number)
+                                .or_default()
+                                .push(TransactionRecord {
+                                    record: log_record,
+                                    position: log_record_position,
+                                });
                         }
-                        LogRecordType::DELETED => self.index.delete(log_record.key.to_vec()),
-                    };
-                    if !update_success {
-                        return Err(FailedToUpdateIndex);
                     }
+                    current_sequential_number = current_sequential_number.max(sequential_number);
 
                     // 递增 offset，下一次读取将从新的位置开始
                     offset += size;
@@ -259,8 +310,36 @@ impl Engine {
                     active_file.set_write_offset(offset)
                 };
             }
-            Ok(())
+            Ok(current_sequential_number)
         }
+    }
+
+    fn update_index(
+        &self,
+        key: Vec<u8>,
+        record_type: LogRecordType,
+        log_record_position: LogRecordPosition,
+    ) -> Result<()> {
+        let update_success = match record_type {
+            LogRecordType::NORMAL => self.index.put(key.to_vec(), log_record_position),
+            LogRecordType::DELETED => self.index.delete(key.to_vec()),
+            LogRecordType::TxnFINISHED => false,
+        };
+        if !update_success {
+            return Err(FailedToUpdateIndex);
+        }
+        Ok(())
+    }
+
+    /// 关闭数据库，释放相关资源
+    pub fn close(self) -> Result<()> {
+        self.sync()
+    }
+
+    /// 持久化活跃文件
+    pub fn sync(&self) -> Result<()> {
+        let read_guard = self.active_file.read();
+        read_guard.sync()
     }
 }
 
@@ -289,8 +368,6 @@ fn load_data_files(dir_path: &Path) -> Result<Vec<DataFile>> {
             // 判断文件名称是否以 .data 结尾
             if file_name.ends_with(DATA_FILE_NAME_SUFFIX) {
                 // parse the file name
-                // let split_names = file_name.split(".").collect();
-                // let fid = split_names[0].parse::<u32>().map_err(|_| DataDirectoryMaybeCorrupted)?;
                 let file_id = file_name
                     .split(".")
                     .next()

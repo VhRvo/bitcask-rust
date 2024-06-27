@@ -26,14 +26,14 @@ pub struct DataFile {
 
 impl DataFile {
     /// 创建或打开一个新的数据文件
-    pub fn new(__dir_path: PathBuf, __file_id: u32) -> Result<DataFile> {
+    pub fn new(dir_path: PathBuf, file_id: u32) -> Result<DataFile> {
         // 根据 path 和 id 构造出完成的文件名称
-        let file_name = get_data_file_name(__dir_path, __file_id);
+        let file_name = get_data_file_name(dir_path, file_id);
         // 初始化 IOManager
         let io_manager = new_io_manager(file_name)?;
 
         Ok(DataFile {
-            file_id: Arc::new(RwLock::new(__file_id)),
+            file_id: Arc::new(RwLock::new(file_id)),
             write_offset: Arc::new(RwLock::new(0)),
             io_manager: Box::new(io_manager),
         })
@@ -57,10 +57,10 @@ impl DataFile {
     }
 
     /// 根据 offset 从数据文件中读取 LogRecord
-    pub fn read_log_record(&self, __offset: u64) -> Result<ReadLogRecord> {
+    pub fn read_log_record(&self, offset: u64) -> Result<ReadLogRecord> {
         // 先读取出 header 部分的数据
         let mut header_buffer = BytesMut::zeroed(max_log_record_header_size());
-        self.io_manager.read(&mut header_buffer, dbg!(__offset))?;
+        self.io_manager.read(&mut header_buffer, offset)?;
         // 取出 Type，在第一个字节
         let record_type = header_buffer.get_u8();
         // 取出 key 和 value 的长度
@@ -77,7 +77,7 @@ impl DataFile {
             let mut key_value_crc_buffer = BytesMut::zeroed(key_size + value_size + 4);
             self.io_manager.read(
                 &mut key_value_crc_buffer,
-                __offset + actual_header_size as u64,
+                offset + actual_header_size as u64,
             )?;
 
             let log_record = LogRecord {
@@ -103,8 +103,8 @@ impl DataFile {
         }
     }
 
-    pub fn write(&self, __buf: &[u8]) -> Result<usize> {
-        let bytes_len = self.io_manager.write(__buf)?;
+    pub fn write(&self, buffer: &[u8]) -> Result<usize> {
+        let bytes_len = self.io_manager.write(buffer)?;
         // 更新 write_offset 字段
         let mut write_offset = self.write_offset.write();
         *write_offset += bytes_len as u64;

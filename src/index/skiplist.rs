@@ -1,3 +1,5 @@
+use bytes::Bytes;
+
 use crate::data::log_record::LogRecordPosition;
 use crate::index::{Indexer, IndexIterator};
 use crate::options::IteratorOptions;
@@ -24,6 +26,10 @@ impl Indexer for SkipList {
     }
 
     fn iterator(&self, _options: IteratorOptions) -> Box<dyn IndexIterator> {
+        todo!()
+    }
+
+    fn list_keys(&self) -> crate::error::Result<Vec<Bytes>> {
         todo!()
     }
 }

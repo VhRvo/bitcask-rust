@@ -34,6 +34,10 @@ pub enum Error {
     ReadDataFileEof,
     #[error("invalid crc value, log record maybe corrupted")]
     InvalidRecordCrc,
+    #[error("the number of batch exceeded the limit")]
+    ExceedMaximumBatchNumber,
+    #[error("merge is in progress, try again later")]
+    MergeIsInProgress
 }
 
 pub type Result<T> = result::Result<T, Error>;

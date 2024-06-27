@@ -3,5 +3,8 @@ pub mod db;
 mod error;
 mod fio;
 mod index;
+mod iterator;
 pub mod options;
 pub mod utilities;
+pub mod batch;
+mod merge;
