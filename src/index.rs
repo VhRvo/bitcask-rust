@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use bytes::Bytes;
 
 use crate::data::log_record::LogRecordPosition;
@@ -6,11 +8,12 @@ use crate::options::{IndexType, IteratorOptions};
 
 pub mod btree;
 pub mod skiplist;
+mod bptree;
 
 /// The abstract index interface
 pub trait Indexer: Sync + Send {
     /// According to the key, store position of data in the index
-    fn put(&self, key: Vec<u8>, pos: LogRecordPosition) -> bool;
+    fn put(&self, key: Vec<u8>, position: LogRecordPosition) -> bool;
     /// According to the key, find position of data from the index
     fn get(&self, key: Vec<u8>) -> Option<LogRecordPosition>;
     /// According to the key, remove position of data from the index
@@ -21,10 +24,11 @@ pub trait Indexer: Sync + Send {
 }
 
 /// 根据类型打开内存索引
-pub fn new_indexer(index_type: IndexType) -> Box<dyn Indexer> {
+pub fn new_indexer(index_type: IndexType, dir_path: PathBuf) -> Box<dyn Indexer> {
     match index_type {
         IndexType::BTree => Box::new(btree::BTree::new()),
         IndexType::SkipList => Box::new(skiplist::SkipList::new()),
+        IndexType::BPlusTree => Box::new(bptree::BPlusTree::new(dir_path))
     }
 }
 

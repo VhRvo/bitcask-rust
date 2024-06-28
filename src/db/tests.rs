@@ -268,3 +268,17 @@ fn test_engine_sync() {
 //     std::fs::remove_dir_all(opts.clone().dir_path).expect("failed to remove path");
 //     std::fs::remove_dir_all(backup_dir).expect("failed to remove path");
 // }
+
+#[test]
+fn test1() {
+    {
+        let smallest = Some(5);
+        println!("{}", (Some(2) < smallest));
+        println!("{}", (Some(6) < smallest));
+    }
+    {
+        let smallest = None;
+        println!("{}", (Some(2) < smallest));
+        println!("{}", (Some(6) < smallest));
+    }
+}

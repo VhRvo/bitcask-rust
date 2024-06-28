@@ -78,13 +78,13 @@ mod tests {
         };
 
         unsafe {
-            let result = fio.write("key-a".to_string().as_bytes_mut());
+            let result = fio.write(b"key-a");
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), 5);
         }
 
         unsafe {
-            let result = fio.write("key-bc".to_string().as_bytes_mut());
+            let result = fio.write(b"key-bc");
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), 6);
         }
@@ -105,13 +105,13 @@ mod tests {
         };
 
         unsafe {
-            let result = fio.write("key-a".to_string().as_bytes_mut());
+            let result = fio.write(b"key-a");
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), 5);
         }
 
         unsafe {
-            let result = fio.write("key-bc".to_string().as_bytes_mut());
+            let result = fio.write(b"key-bc");
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), 6);
         }
@@ -146,13 +146,13 @@ mod tests {
         };
 
         {
-            let result = fio.write("key-a".as_bytes());
+            let result = fio.write(b"key-a");
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), 5);
         }
 
         {
-            let result = fio.write("key-bc".as_bytes());
+            let result = fio.write(b"key-bc");
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), 6);
         }
@@ -185,7 +185,13 @@ mod tests {
             .open(path);
         println!("{:?}", file_handle1);
         println!("{:?}", file_handle2);
-        file_handle1.unwrap().write("abc".as_bytes()).expect("failed to write");
-        file_handle2.unwrap().write("xyz".as_bytes()).expect("failed to write");
+        file_handle1
+            .unwrap()
+            .write(b"abc")
+            .expect("failed to write");
+        file_handle2
+            .unwrap()
+            .write(b"xyz")
+            .expect("failed to write");
     }
 }

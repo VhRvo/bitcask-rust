@@ -1,5 +1,10 @@
 use bytes::{BufMut, BytesMut};
-use prost::{encode_length_delimiter, length_delimiter_len};
+use log::warn;
+use prost::{encode_length_delimiter, length_delimiter_len, Message};
+use prost::encoding::{decode_varint, encode_varint};
+
+use crate::error::Error::FailedToDecodeLogRecordPosition;
+use crate::error::Result;
 
 /// The information of data position, describes which position the data stored
 /// 数据位置索引信息，描述数据存储到哪个位置
@@ -9,6 +14,34 @@ pub struct LogRecordPosition {
     pub(crate) file_id: u32,
     // 表示数据在文件中的存放位置
     pub(crate) offset: u64,
+}
+
+impl LogRecordPosition {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut buffer = BytesMut::new();
+        // u32::encode(&self.file_id, &mut buffer);
+        encode_varint(self.file_id as u64, &mut buffer);
+        encode_varint(self.offset, &mut buffer);
+        buffer.to_vec()
+    }
+}
+
+/// Decode LogRecordPosition
+pub fn decode_log_record_position(position: Vec<u8>) -> Result<LogRecordPosition> {
+    let mut buffer = BytesMut::new();
+    buffer.put_slice(&position);
+
+    let file_id = decode_varint(&mut buffer).map_err(|err| {
+        warn!("failed to decode a log record position {err}");
+        FailedToDecodeLogRecordPosition
+    })? as u32;
+
+    let offset = decode_varint(&mut buffer).map_err(|err| {
+        warn!("failed to decode a log record position {err}");
+        FailedToDecodeLogRecordPosition
+    })?;
+
+    Ok(LogRecordPosition { file_id, offset })
 }
 
 #[derive(Eq, PartialEq, Copy, Clone, Debug)]
@@ -107,8 +140,8 @@ mod tests {
         // 正常编码
         {
             let record = LogRecord {
-                key: "name".as_bytes().to_vec(),
-                value: "bitcask_rust".as_bytes().to_vec(),
+                key: b"name".to_vec(),
+                value: b"bitcask_rust".to_vec(),
                 record_type: LogRecordType::NORMAL,
             };
             let (encoded, crc) = record.encode_and_get_src();
@@ -119,7 +152,7 @@ mod tests {
         // Value 为空
         {
             let record = LogRecord {
-                key: "name".as_bytes().to_vec(),
+                key: b"name".to_vec(),
                 value: Default::default(),
                 record_type: LogRecordType::NORMAL,
             };
@@ -131,8 +164,8 @@ mod tests {
         // 类型为 Deleted 的数据
         {
             let record = LogRecord {
-                key: "name".as_bytes().to_vec(),
-                value: "bitcask_rust".as_bytes().to_vec(),
+                key: b"name".to_vec(),
+                value: b"bitcask_rust".to_vec(),
                 record_type: LogRecordType::DELETED,
             };
             let (encoded, crc) = record.encode_and_get_src();

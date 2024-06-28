@@ -37,7 +37,9 @@ pub enum Error {
     #[error("the number of batch exceeded the limit")]
     ExceedMaximumBatchNumber,
     #[error("merge is in progress, try again later")]
-    MergeIsInProgress
+    MergeIsInProgress,
+    #[error("failed to decode a log-record position")]
+    FailedToDecodeLogRecordPosition,
 }
 
 pub type Result<T> = result::Result<T, Error>;

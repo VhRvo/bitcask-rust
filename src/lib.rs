@@ -1,10 +1,10 @@
+pub mod batch;
 mod data;
 pub mod db;
 mod error;
 mod fio;
 mod index;
 mod iterator;
+mod merge;
 pub mod options;
 pub mod utilities;
-pub mod batch;
-mod merge;

@@ -14,6 +14,7 @@ pub struct Options {
 pub enum IndexType {
     BTree,
     SkipList,
+    BPlusTree,
 }
 
 impl Default for Options {

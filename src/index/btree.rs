@@ -6,6 +6,7 @@ use parking_lot::RwLock;
 
 use crate::data::log_record::LogRecordPosition;
 use crate::index::{Indexer, IndexIterator};
+use crate::iterator::GenericIterator;
 use crate::options::IteratorOptions;
 
 /// BTree Indexer
@@ -22,9 +23,9 @@ impl BTree {
 }
 
 impl Indexer for BTree {
-    fn put(&self, key: Vec<u8>, pos: LogRecordPosition) -> bool {
+    fn put(&self, key: Vec<u8>, position: LogRecordPosition) -> bool {
         let mut write_guard = self.tree.write();
-        write_guard.insert(key, pos);
+        write_guard.insert(key, position);
         true
     }
 
@@ -47,7 +48,7 @@ impl Indexer for BTree {
         if options.reverse {
             items.reverse();
         }
-        Box::new(BTreeIterator {
+        Box::new(GenericIterator {
             items,
             current_index: 0,
             options,
@@ -63,45 +64,45 @@ impl Indexer for BTree {
     }
 }
 
-/// BTree 索引迭代器
-pub struct BTreeIterator {
-    items: Vec<(Vec<u8>, LogRecordPosition)>,
-    current_index: usize,
-    options: IteratorOptions,
-}
+// BTree 索引迭代器
+// pub struct BTreeIterator {
+//     items: Vec<(Vec<u8>, LogRecordPosition)>,
+//     current_index: usize,
+//     options: IteratorOptions,
+// }
 
-impl IndexIterator for BTreeIterator {
-    fn rewind(&mut self) {
-        self.current_index = 0;
-    }
-
-    fn seek(&mut self, key: Vec<u8>) {
-        let result = if self.options.reverse {
-            self.items
-                .binary_search_by(|item: &(Vec<_>, LogRecordPosition)| item.0.cmp(&key).reverse())
-        } else {
-            self.items
-                .binary_search_by(|item: &(Vec<_>, LogRecordPosition)| item.0.cmp(&key))
-        };
-        // let comparator: Box<dyn Fn(_) -> Ordering> = if self.options.reverse {
-        //     Box::new(|item: &(Vec<_>, LogRecordPosition)| item.0.cmp(&key).reverse())
-        // } else {
-        //     Box::new(|item: &(Vec<_>, LogRecordPosition)| item.0.cmp(&key))
-        // };
-        // let result = self.items.binary_search_by(comparator);
-        self.current_index = result.unwrap_or_else(|index| index);
-    }
-
-    fn next(&mut self) -> Option<(&Vec<u8>, &LogRecordPosition)> {
-        loop {
-            self.current_index += 1;
-            let item = self.items.get(self.current_index)?;
-            if item.0.starts_with(&self.options.prefix) {
-                return Some((&item.0, &item.1));
-            }
-        }
-    }
-}
+// impl IndexIterator for BTreeIterator {
+//     fn rewind(&mut self) {
+//         self.current_index = 0;
+//     }
+//
+//     fn seek(&mut self, key: Vec<u8>) {
+//         let result = if self.options.reverse {
+//             self.items
+//                 .binary_search_by(|item: &(Vec<_>, LogRecordPosition)| item.0.cmp(&key).reverse())
+//         } else {
+//             self.items
+//                 .binary_search_by(|item: &(Vec<_>, LogRecordPosition)| item.0.cmp(&key))
+//         };
+//         // let comparator: Box<dyn Fn(_) -> Ordering> = if self.options.reverse {
+//         //     Box::new(|item: &(Vec<_>, LogRecordPosition)| item.0.cmp(&key).reverse())
+//         // } else {
+//         //     Box::new(|item: &(Vec<_>, LogRecordPosition)| item.0.cmp(&key))
+//         // };
+//         // let result = self.items.binary_search_by(comparator);
+//         self.current_index = result.unwrap_or_else(|index| index);
+//     }
+//
+//     fn next(&mut self) -> Option<(&Vec<u8>, &LogRecordPosition)> {
+//         loop {
+//             self.current_index += 1;
+//             let item = self.items.get(self.current_index)?;
+//             if item.0.starts_with(&self.options.prefix) {
+//                 return Some((&item.0, &item.1));
+//             }
+//         }
+//     }
+// }
 
 #[cfg(test)]
 mod tests {
@@ -112,7 +113,7 @@ mod tests {
         let btree = BTree::new();
         {
             let result = btree.put(
-                "".as_bytes().to_vec(),
+                b"".to_vec(),
                 LogRecordPosition {
                     file_id: 1,
                     offset: 10,
@@ -122,7 +123,7 @@ mod tests {
         }
         {
             let result = btree.put(
-                "abc".as_bytes().to_vec(),
+                b"abc".to_vec(),
                 LogRecordPosition {
                     file_id: 2,
                     offset: 20,
@@ -137,7 +138,7 @@ mod tests {
         let btree = BTree::new();
         {
             let result = btree.put(
-                "".as_bytes().to_vec(),
+                b"".to_vec(),
                 LogRecordPosition {
                     file_id: 1,
                     offset: 10,
@@ -147,7 +148,7 @@ mod tests {
         }
         {
             let result = btree.put(
-                "abc".as_bytes().to_vec(),
+                b"abc".to_vec(),
                 LogRecordPosition {
                     file_id: 2,
                     offset: 20,
@@ -156,14 +157,14 @@ mod tests {
             assert!(result);
         }
         {
-            let position = btree.get("".as_bytes().to_vec());
+            let position = btree.get(b"".to_vec());
             println!("{:?}", position);
             assert!(position.is_some());
             assert_eq!(position.unwrap().file_id, 1);
             assert_eq!(position.unwrap().offset, 10);
         }
         {
-            let position = btree.get("abc".as_bytes().to_vec());
+            let position = btree.get(b"abc".to_vec());
             println!("{:?}", position);
             assert!(position.is_some());
             assert_eq!(position.unwrap().file_id, 2);
@@ -176,7 +177,7 @@ mod tests {
         let btree = BTree::new();
         {
             let result = btree.put(
-                "".as_bytes().to_vec(),
+                b"".to_vec(),
                 LogRecordPosition {
                     file_id: 1,
                     offset: 10,
@@ -186,7 +187,7 @@ mod tests {
         }
         {
             let result = btree.put(
-                "abc".as_bytes().to_vec(),
+                b"abc".to_vec(),
                 LogRecordPosition {
                     file_id: 2,
                     offset: 20,
@@ -195,15 +196,15 @@ mod tests {
             assert!(result);
         }
         {
-            let result = btree.delete("".as_bytes().to_vec());
+            let result = btree.delete(b"".to_vec());
             assert!(result)
         }
         {
-            let result = btree.delete("abc".as_bytes().to_vec());
+            let result = btree.delete(b"abc".to_vec());
             assert!(result);
         }
         {
-            let result = btree.delete("non-existed".as_bytes().to_vec());
+            let result = btree.delete(b"non-existed".to_vec());
             assert!(!result);
         }
     }
@@ -214,41 +215,41 @@ mod tests {
 
         // 无数据时
         let mut iterator = btree.iterator(IteratorOptions::default());
-        iterator.seek("aa".as_bytes().to_vec());
+        iterator.seek(b"aa".to_vec());
         assert!(iterator.next().is_none());
 
         // 一条数据时
         btree.put(
-            "ccdeb".as_bytes().to_vec(),
+            b"ccdeb".to_vec(),
             LogRecordPosition {
                 file_id: 1,
                 offset: 10,
             },
         );
         let mut iterator = btree.iterator(IteratorOptions::default());
-        iterator.seek("aa".as_bytes().to_vec());
+        iterator.seek(b"aa".to_vec());
         assert!(iterator.next().is_some());
 
         let mut iterator = btree.iterator(IteratorOptions::default());
-        iterator.seek("zz".as_bytes().to_vec());
+        iterator.seek(b"zz".to_vec());
         assert!(iterator.next().is_none());
 
         btree.put(
-            "bbedd".as_bytes().to_vec(),
+            b"bbedd".to_vec(),
             LogRecordPosition {
                 file_id: 1,
                 offset: 10,
             },
         );
         btree.put(
-            "aaedga".as_bytes().to_vec(),
+            b"aaedga".to_vec(),
             LogRecordPosition {
                 file_id: 1,
                 offset: 10,
             },
         );
         btree.put(
-            "cadde".as_bytes().to_vec(),
+            b"cadde".to_vec(),
             LogRecordPosition {
                 file_id: 1,
                 offset: 10,
@@ -256,30 +257,30 @@ mod tests {
         );
 
         let mut iterator = btree.iterator(IteratorOptions::default());
-        iterator.seek("b".as_bytes().to_vec());
+        iterator.seek(b"b".to_vec());
         while let Some(item) = iterator.next() {
             // println!("{:?}", String::from_utf8(item.0.to_vec()));
             assert!(item.0.len() > 0);
         }
 
         let mut iterator = btree.iterator(IteratorOptions::default());
-        iterator.seek("bbedd".as_bytes().to_vec());
+        iterator.seek(b"bbedd".to_vec());
         assert_eq!(
-            Some(&"bbedd".as_bytes().to_vec()),
+            Some(&b"bbedd".to_vec()),
             iterator.next().map(|item| item.0)
         );
 
         let mut iterator = btree.iterator(IteratorOptions::default());
-        iterator.seek("zz".as_bytes().to_vec());
+        iterator.seek(b"zz".to_vec());
         assert!(iterator.next().is_none());
 
         let mut iterator_option = IteratorOptions::default();
         iterator_option.reverse = true;
         let mut iterator = btree.iterator(iterator_option);
-        iterator.seek("bb".as_bytes().to_vec());
+        iterator.seek(b"bb".to_vec());
 
         assert_eq!(
-            Some(&"aaedga".as_bytes().to_vec()),
+            Some(&b"aaedga".to_vec()),
             iterator.next().map(|item| item.0)
         );
         assert!(iterator.next().is_none());

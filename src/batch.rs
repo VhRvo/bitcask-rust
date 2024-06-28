@@ -13,7 +13,7 @@ use crate::error::Error::{ExceedMaximumBatchNumber, KeyIsEmpty};
 use crate::error::Result;
 use crate::options::WriteBatchOptions;
 
-const TXN_FIN_KEY: &[u8] = "txn-finished".as_bytes();
+const TXN_FIN_KEY: &[u8] = b"txn-finished";
 pub(crate) const NON_TRANSACTION_SEQUENTIAL_NUMBER: usize = 0;
 
 /// 批量写操作，保证原子性
@@ -148,7 +148,6 @@ pub(crate) fn parse_log_record_key(key: Vec<u8>) -> (Vec<u8>, usize) {
     (buffer.to_vec(), sequential_number)
 }
 
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -269,12 +268,11 @@ mod tests {
     //     // wb.commit();
     // }
 
-
     #[test]
     fn test1() {
         let sequential_number = 0x1234567812345678;
         println!("seq no: {}", sequential_number);
-        let key = "abcdefg".as_bytes().to_vec();
+        let key = b"abcdefg".to_vec();
         println!("key: {:?}", key);
         let with = log_record_key_with_sequential_number(key.clone(), sequential_number);
         println!("with: {:?}", with);
@@ -287,7 +285,7 @@ mod tests {
     fn test2() {
         // let sequential_number = 42;
         // println!("seq no: {}", sequential_number);
-        let key = "ABCDEFG".as_bytes().to_vec();
+        let key = b"ABCDEFG".to_vec();
         println!("key: {:?}", key);
         // let with = log_record_key_with_sequential_number(key.clone(), sequential_number);
         // println!("with: {:?}", with);
@@ -296,5 +294,3 @@ mod tests {
         println!("number: {number:?}");
     }
 }
-
-

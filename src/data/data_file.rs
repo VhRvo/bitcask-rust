@@ -6,14 +6,17 @@ use parking_lot::RwLock;
 use prost::{decode_length_delimiter, length_delimiter_len};
 
 use crate::data::log_record::{
-    LogRecord, LogRecordType, max_log_record_header_size, ReadLogRecord,
+    LogRecord, LogRecordPosition, LogRecordType, max_log_record_header_size, ReadLogRecord,
 };
+use crate::data::log_record::LogRecordType::NORMAL;
 use crate::error::Error::{InvalidRecordCrc, ReadDataFileEof};
 use crate::error::Result;
 use crate::fio;
 use crate::fio::new_io_manager;
 
-pub const DATA_FILE_NAME_SUFFIX: &str = ".data";
+pub(crate) const DATA_FILE_NAME_SUFFIX: &str = ".data";
+pub(crate) const HINT_FILE_NAME: &str = "hint-index";
+pub(crate) const MERGE_FINISHED_FILE_NAME: &str = "merge-finished";
 
 /// 数据文件
 pub struct DataFile {
@@ -34,6 +37,32 @@ impl DataFile {
 
         Ok(DataFile {
             file_id: Arc::new(RwLock::new(file_id)),
+            write_offset: Arc::new(RwLock::new(0)),
+            io_manager: Box::new(io_manager),
+        })
+    }
+
+    pub fn new_hint_file(dir_path: PathBuf) -> Result<DataFile> {
+        // 根据 path 和 id 构造出完成的文件名称
+        let file_name = dir_path.join(HINT_FILE_NAME);
+        // 初始化 IOManager
+        let io_manager = new_io_manager(file_name)?;
+
+        Ok(DataFile {
+            file_id: Arc::new(RwLock::new(0)),
+            write_offset: Arc::new(RwLock::new(0)),
+            io_manager: Box::new(io_manager),
+        })
+    }
+
+    pub fn new_merge_finished_file(dir_path: PathBuf) -> Result<DataFile> {
+        // 根据 path 和 id 构造出完成的文件名称
+        let file_name = dir_path.join(MERGE_FINISHED_FILE_NAME);
+        // 初始化 IOManager
+        let io_manager = new_io_manager(file_name)?;
+
+        Ok(DataFile {
+            file_id: Arc::new(RwLock::new(0)),
             write_offset: Arc::new(RwLock::new(0)),
             io_manager: Box::new(io_manager),
         })
@@ -111,13 +140,24 @@ impl DataFile {
         Ok(bytes_len)
     }
 
+    pub fn write_hint_record(&self, key: Vec<u8>, position: LogRecordPosition) -> Result<()> {
+        let hint_record = LogRecord {
+            key,
+            value: position.encode(),
+            record_type: NORMAL,
+        };
+        let encoded_record = hint_record.encode();
+        self.write(&encoded_record)?;
+        Ok(())
+    }
+
     pub fn sync(&self) -> Result<()> {
         self.io_manager.sync()
     }
 }
 
 /// 构造文件名称
-fn get_data_file_name(path: PathBuf, file_id: u32) -> PathBuf {
+pub(crate) fn get_data_file_name(path: PathBuf, file_id: u32) -> PathBuf {
     let name = std::format!("{:09}", file_id) + DATA_FILE_NAME_SUFFIX;
     path.join(name)
 }
@@ -153,14 +193,14 @@ mod tests {
         let data_file = data_file_result.unwrap();
         assert_eq!(data_file.get_file_id(), 100);
 
-        let insert = |value: &str| {
-            let write_result = data_file.write(value.as_bytes());
+        let insert = |value: &[u8]| {
+            let write_result = data_file.write(value);
             assert!(write_result.is_ok());
             assert_eq!(write_result.unwrap(), 3);
         };
-        insert("aaa");
-        insert("bbb");
-        insert("ccc");
+        insert(b"aaa");
+        insert(b"bbb");
+        insert(b"ccc");
     }
 
     #[test]
@@ -187,8 +227,8 @@ mod tests {
 
         let first_offset = {
             let encoded = LogRecord {
-                key: "name".as_bytes().to_vec(),
-                value: "bit-cask-rust-kv".as_bytes().to_vec(),
+                key: b"name".to_vec(),
+                value: b"bit-cask-rust-kv".to_vec(),
                 record_type: NORMAL,
             };
             let write_result = data_file.write(&encoded.encode());
@@ -206,15 +246,15 @@ mod tests {
         };
         let second_offset = {
             let encoded = LogRecord {
-                key: "name_id".as_bytes().to_vec(),
-                value: "new-value".as_bytes().to_vec(),
+                key: b"name_id".to_vec(),
+                value: b"new-value".to_vec(),
                 record_type: NORMAL,
             };
             let write_result = data_file.write(&encoded.encode());
             assert!(write_result.is_ok());
 
             // 从新的位置开始
-            let read_result = data_file.read_log_record(dbg!(first_offset));
+            let read_result = data_file.read_log_record(first_offset);
             assert!(read_result.is_ok());
             let ReadLogRecord { log_record, size } = read_result.unwrap();
             assert_eq!(3220692689, log_record.get_crc());
@@ -226,7 +266,7 @@ mod tests {
         {
             // 类型是 Deleted
             let encoded = LogRecord {
-                key: "name".as_bytes().to_vec(),
+                key: b"name".to_vec(),
                 value: Default::default(),
                 record_type: DELETED,
             };

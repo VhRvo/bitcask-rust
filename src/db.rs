@@ -11,9 +11,12 @@ use parking_lot::{Mutex, RwLock};
 use crate::batch::{
     log_record_key_with_sequential_number, NON_TRANSACTION_SEQUENTIAL_NUMBER, parse_log_record_key,
 };
-use crate::data::data_file::{DATA_FILE_NAME_SUFFIX, DataFile};
+use crate::data::data_file::{
+    DATA_FILE_NAME_SUFFIX, DataFile, HINT_FILE_NAME, MERGE_FINISHED_FILE_NAME,
+};
 use crate::data::log_record::{
-    LogRecord, LogRecordPosition, LogRecordType, ReadLogRecord, TransactionRecord,
+    decode_log_record_position, LogRecord, LogRecordPosition, LogRecordType, ReadLogRecord,
+    TransactionRecord,
 };
 use crate::error::Error::{
     DataDirectoryMaybeCorrupted, DataFileSizeIsTooSmall, DirPathIsEmpty,
@@ -23,7 +26,8 @@ use crate::error::Error::{
 use crate::error::Result;
 use crate::index::Indexer;
 use crate::index::new_indexer;
-use crate::options::Options;
+use crate::merge::load_merge_files;
+use crate::options::{IndexType, Options};
 
 #[cfg(test)]
 mod tests;
@@ -64,6 +68,10 @@ impl Engine {
                 FailedToCreateDatabaseDirectory
             })?;
         }
+
+        // 加载 merge 数据目录
+        load_merge_files(PathBuf::from(dir_path))?;
+
         // 加载数据文件
         let mut data_files = load_data_files(dir_path)?;
         // 设置 file id 信息
@@ -89,22 +97,29 @@ impl Engine {
         };
 
         let index_type = options.index_type.clone();
+        let dir_path = PathBuf::from(dir_path);
         let mut engine = Self {
             options: Arc::new(options),
             active_file: Arc::new(RwLock::new(active_file)),
             older_files: Arc::new(RwLock::new(older_files)),
-            index: new_indexer(index_type),
+            index: new_indexer(index_type, dir_path),
             file_ids,
             batch_commit_lock: Mutex::new(()),
             sequential_number: AtomicUsize::new(1),
             merging_lock: Mutex::new(()),
         };
 
-        // 从数据文件中加载索引
-        let current_sequential_number = engine.load_index_from_data_files()?;
-        engine
-            .sequential_number
-            .store(current_sequential_number + 1, Ordering::SeqCst);
+        // B+ 树不需要从数据文件中加载索引
+        if let IndexType::BPlusTree = index_type {
+            // 从 hint 文件加载索引
+            engine.load_index_from_hint_file()?;
+
+            // 从数据文件中加载索引
+            let current_sequential_number = engine.load_index_from_data_files()?;
+            engine
+                .sequential_number
+                .store(current_sequential_number + 1, Ordering::SeqCst);
+        }
 
         Ok(engine)
     }
@@ -245,6 +260,18 @@ impl Engine {
         if self.file_ids.is_empty() {
             Ok(current_sequential_number)
         } else {
+            // 拿到最近未参与 merge 的文件 id
+            let merge_finished_file = self.options.dir_path.join(MERGE_FINISHED_FILE_NAME);
+            let smallest_non_merge_file_id = if merge_finished_file.is_file() {
+                let merge_finished_file =
+                    DataFile::new_merge_finished_file(self.options.dir_path.clone())?;
+                let merge_finished_record = merge_finished_file.read_log_record(0)?;
+                let value = String::from_utf8(merge_finished_record.log_record.value).unwrap();
+                value.parse::<u32>().ok()
+            } else {
+                None
+            };
+
             // 暂存事务相关的数据
             let mut transaction_records: HashMap<usize, Vec<TransactionRecord>> =
                 HashMap::<usize, Vec<_>>::new();
@@ -254,6 +281,14 @@ impl Engine {
 
             // 遍历每个文件 id，取出对应的数据文件，并加载其中的数据
             for (ii, file_id) in self.file_ids.iter().enumerate() {
+                // if smallest_non_merge_file_id
+                //     .map(|smallest_non_merge_file_id| *file_id < smallest_non_merge_file_id)
+                //     .unwrap_or_default()
+                if Some(*file_id) < smallest_non_merge_file_id
+                {
+                    continue;
+                }
+
                 let mut offset = 0;
                 loop {
                     let read_log_record_result = if *file_id == active_file.get_file_id() {
@@ -311,6 +346,36 @@ impl Engine {
                 };
             }
             Ok(current_sequential_number)
+        }
+    }
+
+    /// 从 hint 索引文件中加载索引
+    fn load_index_from_hint_file(&self) -> Result<()> {
+        let hint_file_name = self.options.dir_path.join(HINT_FILE_NAME);
+        // 如果不存在，直接返回
+        if !hint_file_name.is_file() {
+            Ok(())
+        } else {
+            // let hint_file = DataFile::new_hint_file(hint_file_name)?;
+            let hint_file = DataFile::new_hint_file(self.options.dir_path.clone())?;
+            let mut offset = 0;
+            loop {
+                let ReadLogRecord {
+                    log_record,
+                    size,
+                } = match hint_file.read_log_record(offset) {
+                    Ok(result) => result,
+                    Err(err) if err == ReadDataFileEof => break,
+                    Err(err) => return Err(err),
+                };
+
+                // 解码 value，拿到内存位置索引
+                let log_record_position = decode_log_record_position(log_record.value)?;
+                // 存储到内存索引中
+                self.index.put(log_record.key, log_record_position);
+                offset += size;
+            }
+            Ok(())
         }
     }
 
@@ -388,3 +453,5 @@ fn load_data_files(dir_path: &Path) -> Result<Vec<DataFile>> {
     }
     Ok(data_files)
 }
+
+
