@@ -7,18 +7,14 @@ use log::error;
 use crate::batch::{
     log_record_key_with_sequential_number, NON_TRANSACTION_SEQUENTIAL_NUMBER, parse_log_record_key,
 };
-use crate::data::data_file::{
-    DataFile, get_data_file_name, MERGE_FINISHED_FILE_NAME, SEQUENTIAL_NUMBER_FILE_NAME,
-};
+use crate::data::data_file::{DATA_FILE_NAME_SUFFIX, DataFile, get_data_file_name, MERGE_FINISHED_FILE_NAME, SEQUENTIAL_NUMBER_FILE_NAME};
 use crate::data::log_record::{LogRecord, ReadLogRecord};
 use crate::data::log_record::LogRecordType::NORMAL;
 use crate::db::{Engine, FILE_LOCK_NAME};
-use crate::error::Error::{
-    FailedToCreateDatabaseDirectory, FailedToReadDataBaseDirectory, MergeIsInProgress,
-    ReadDataFileEof,
-};
+use crate::error::Error::{FailedToCreateDatabaseDirectory, FailedToReadDataBaseDirectory, MergeIsInProgress, MergeRatioUnreached, NotEnoughSpaceForMerge, ReadDataFileEof};
 use crate::error::Result;
 use crate::options::{IOType, Options};
+use crate::utilities;
 
 const MERGE_DIR_NAME: &str = "merge";
 const MERGE_FINISHED_KEY: &[u8] = b"merge.finished";
@@ -29,7 +25,20 @@ impl Engine {
         match lock {
             None => Err(MergeIsInProgress),
             Some(_guard) => {
-                let _reclaim_size = self.reclaim_size.load(Ordering::SeqCst);
+                // 如果数据库空，则直接返回
+                if self.is_empty() {
+                    return Ok(())
+                }
+                let reclaim_size = self.reclaim_size.load(Ordering::SeqCst);
+                let total_size = utilities::file::dir_disk_size(self.options.dir_path.clone());
+                if (reclaim_size as f32 / total_size as f32) < self.options.merge_ratio {
+                    return Err(MergeRatioUnreached);
+                }
+
+                let available_size = utilities::file::available_disk_size();
+                if total_size - reclaim_size <= available_size {
+                    return Err(NotEnoughSpaceForMerge);
+                }
 
                 let merge_files = self.rotate_merge_files()?;
                 let merge_path = get_merge_path(self.options.dir_path.clone());
@@ -109,6 +118,12 @@ impl Engine {
         }
     }
 
+    fn is_empty(&self) -> bool {
+        let active_file = self.active_file.read();
+        let older_files = self.active_file.read();
+        active_file.get_write_offset() == 0 && older_files.len() == 0
+    }
+
     fn rotate_merge_files(&self) -> Result<Vec<DataFile>> {
         // 取出旧的数据文件的 id
         let mut merge_file_ids = Vec::new();
@@ -178,6 +193,11 @@ pub(crate) fn load_merge_files(dir_path: PathBuf) -> Result<()> {
                     continue;
                 }
                 if file_name.ends_with(FILE_LOCK_NAME) {
+                    continue;
+                }
+                // 数据文件为空，则直接返回
+                let metadata = entry.metadata().unwrap();
+                if file_name.ends_with(DATA_FILE_NAME_SUFFIX) && metadata.len() == 0 {
                     continue;
                 }
                 merge_file_names.push(entry.file_name());

@@ -53,7 +53,9 @@ pub enum Error {
     #[error("invalid merge ratio, must between 0 and 1")]
     InvalidMergeRatio,
     #[error("doesn't reach the merge ratio")]
-    MergeRatioUnreached
+    MergeRatioUnreached,
+    #[error("space is not enough for merge")]
+    NotEnoughSpaceForMerge,
 }
 
 pub type Result<T> = result::Result<T, Error>;

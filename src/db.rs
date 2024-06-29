@@ -83,7 +83,7 @@ pub struct Statistics {
     // 可以回收的数据量
     pub(crate) reclaim_size: u64,
     // 数据目录占据的磁盘空间的大小
-    pub(crate) disk_size: usize,
+    pub(crate) disk_size: u64,
 }
 
 impl Engine {
@@ -546,8 +546,7 @@ impl Engine {
             key_count: self.list_keys()?.len(),
             data_file_count: self.older_files.read().len() + 1,
             reclaim_size: self.reclaim_size.load(Ordering::SeqCst),
-            // disk_size: utilities::file::dir_disk_size(self.options.dir_path.clone())?,
-            disk_size: todo!(),
+            disk_size: utilities::file::dir_disk_size(self.options.dir_path.clone()),
         })
     }
 }

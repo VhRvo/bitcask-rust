@@ -1,2 +1,2 @@
 pub(crate) mod rand_kv;
-mod file;
+pub(crate) mod file;
