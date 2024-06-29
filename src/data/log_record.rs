@@ -14,6 +14,8 @@ pub struct LogRecordPosition {
     pub(crate) file_id: u32,
     // 表示数据在文件中的存放位置
     pub(crate) offset: u64,
+    // 数据在磁盘上所占据的空间
+    pub(crate) size: u64,
 }
 
 impl LogRecordPosition {
@@ -22,6 +24,7 @@ impl LogRecordPosition {
         // u32::encode(&self.file_id, &mut buffer);
         encode_varint(self.file_id as u64, &mut buffer);
         encode_varint(self.offset, &mut buffer);
+        encode_varint(self.size, &mut buffer);
         buffer.to_vec()
     }
 }
@@ -41,7 +44,12 @@ pub fn decode_log_record_position(position: Vec<u8>) -> Result<LogRecordPosition
         FailedToDecodeLogRecordPosition
     })?;
 
-    Ok(LogRecordPosition { file_id, offset })
+    let size = decode_varint(&mut buffer).map_err(|err| {
+        warn!("failed to decode a log record position {err}");
+        FailedToDecodeLogRecordPosition
+    })?;
+
+    Ok(LogRecordPosition { file_id, offset, size })
 }
 
 #[derive(Eq, PartialEq, Copy, Clone, Debug)]

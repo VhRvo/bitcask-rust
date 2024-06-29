@@ -70,7 +70,6 @@ pub struct GenericIterator {
     pub(crate) options: IteratorOptions,
 }
 
-
 impl IndexIterator for GenericIterator {
     fn rewind(&mut self) {
         self.current_index = 0;
@@ -103,7 +102,6 @@ impl IndexIterator for GenericIterator {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

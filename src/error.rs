@@ -40,6 +40,18 @@ pub enum Error {
     MergeIsInProgress,
     #[error("failed to decode a log-record position")]
     FailedToDecodeLogRecordPosition,
+    #[error("should not use write-batch in B+ tree indexer")]
+    ShouldNotUseWriteBatch,
+    #[error("parse failed")]
+    FailedToParse,
+    #[error("file doesn't exist")]
+    FileNotExists,
+    #[error("database is using")]
+    DatabaseIsUsing,
+    #[error("this function doesn't implement for MMap IOManager")]
+    NotForMmap,
+    #[error("invalid merge ratio, must between 0 and 1")]
+    InvalidMergeRatio,
 }
 
 pub type Result<T> = result::Result<T, Error>;

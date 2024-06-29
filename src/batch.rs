@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::mem;
+use std::ops::DerefMut;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -6,11 +8,12 @@ use bytes::{BufMut, Bytes, BytesMut};
 use parking_lot::Mutex;
 use prost::{decode_length_delimiter, encode_length_delimiter};
 
-use crate::data::log_record::{LogRecord, LogRecordType};
+use crate::data::log_record::{LogRecord, LogRecordPosition, LogRecordType};
 use crate::data::log_record::LogRecordType::{DELETED, NORMAL};
 use crate::db::Engine;
-use crate::error::Error::{ExceedMaximumBatchNumber, KeyIsEmpty};
+use crate::error::Error::{ExceedMaximumBatchNumber, KeyIsEmpty, ShouldNotUseWriteBatch};
 use crate::error::Result;
+use crate::options::IndexType::BPlusTree;
 use crate::options::WriteBatchOptions;
 
 const TXN_FIN_KEY: &[u8] = b"txn-finished";
@@ -27,11 +30,18 @@ pub struct WriteBatch<'a> {
 
 impl Engine {
     pub fn new_write_batch(&self, options: WriteBatchOptions) -> Result<WriteBatch> {
-        Ok(WriteBatch {
-            pending_writes: Arc::new(Mutex::new(HashMap::new())),
-            engine: self,
-            options,
-        })
+        if self.options.index_type == BPlusTree
+            && !self.sequential_number_file_exists
+            && !self.is_initial
+        {
+            Err(ShouldNotUseWriteBatch)
+        } else {
+            Ok(WriteBatch {
+                pending_writes: Arc::new(Mutex::new(HashMap::new())),
+                engine: self,
+                options,
+            })
+        }
     }
 }
 
@@ -88,10 +98,12 @@ impl WriteBatch<'_> {
             let mut positions = HashMap::new();
 
             // 开始写数据到数据文件当中
-            for (key, item) in pending_write_guard.iter() {
+            // There is no need to maintain item in the future of this function,
+            // so use iter_mut and mem::take() to decrease the use of clone.
+            for (key, item) in pending_write_guard.iter_mut() {
                 let mut log_record = LogRecord {
-                    key: log_record_key_with_sequential_number(key.clone(), sequential_number),
-                    value: item.value.clone(),
+                    key: log_record_key_with_sequential_number(mem::take(&mut item.key), sequential_number),
+                    value: mem::take(&mut item.value),
                     record_type: item.record_type,
                 };
 
@@ -112,18 +124,28 @@ impl WriteBatch<'_> {
             }
 
             // 数据全部写完之后更新内存索引
-            for (key, item) in pending_write_guard.iter() {
+            // Shouldn't access other fields of item whose were taken before.
+            for (key, item) in mem::take(pending_write_guard.deref_mut()).into_iter() {
                 // todo: use vector and .zip() to replace the hash map
-                let record_position = positions.get(key).unwrap();
+                let record_position = positions.get(&key).unwrap();
                 if item.record_type == LogRecordType::NORMAL {
-                    assert!(self.engine.index.put(key.clone(), *record_position));
+                    self.engine.index.put(key, *record_position).map(
+                        |LogRecordPosition { size, .. }| {
+                            self.engine.reclaim_size.fetch_add(size, Ordering::SeqCst);
+                        },
+                    );
                 } else if item.record_type == LogRecordType::DELETED {
-                    assert!(self.engine.index.delete(key.clone()));
+                    self.engine.index.delete(key).map(
+                        |LogRecordPosition { size, .. }| {
+                            self.engine.reclaim_size.fetch_add(size, Ordering::SeqCst);
+                        },
+                    );
                 }
             }
 
             // 清空暂存数据
-            pending_write_guard.clear();
+            // mem::take() do this job
+            // pending_write_guard.clear();
             Ok(())
         }
     }

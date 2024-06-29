@@ -1,21 +1,24 @@
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 
 use log::error;
 
 use crate::batch::{
     log_record_key_with_sequential_number, NON_TRANSACTION_SEQUENTIAL_NUMBER, parse_log_record_key,
 };
-use crate::data::data_file::{DataFile, get_data_file_name, MERGE_FINISHED_FILE_NAME};
+use crate::data::data_file::{
+    DataFile, get_data_file_name, MERGE_FINISHED_FILE_NAME, SEQUENTIAL_NUMBER_FILE_NAME,
+};
 use crate::data::log_record::{LogRecord, ReadLogRecord};
 use crate::data::log_record::LogRecordType::NORMAL;
-use crate::db::Engine;
+use crate::db::{Engine, FILE_LOCK_NAME};
 use crate::error::Error::{
     FailedToCreateDatabaseDirectory, FailedToReadDataBaseDirectory, MergeIsInProgress,
     ReadDataFileEof,
 };
 use crate::error::Result;
-use crate::options::Options;
+use crate::options::{IOType, Options};
 
 const MERGE_DIR_NAME: &str = "merge";
 const MERGE_FINISHED_KEY: &[u8] = b"merge.finished";
@@ -26,6 +29,8 @@ impl Engine {
         match lock {
             None => Err(MergeIsInProgress),
             Some(_guard) => {
+                let _reclaim_size = self.reclaim_size.load(Ordering::SeqCst);
+
                 let merge_files = self.rotate_merge_files()?;
                 let merge_path = get_merge_path(self.options.dir_path.clone());
                 // 如果目录已经存在，则先进行删除
@@ -117,12 +122,12 @@ impl Engine {
         // 保证数据文件的持久性
         active_file.sync()?;
         let active_file_id = active_file.get_file_id();
-        let new_active_file = DataFile::new(self.options.dir_path.clone(), active_file_id + 1)?;
+        let new_active_file = DataFile::new(self.options.dir_path.clone(), active_file_id + 1, IOType::StandardIO)?;
         *active_file = new_active_file;
 
         // 加到久的数据文件当中
         // todo: use mem::replace
-        let old_file = DataFile::new(self.options.dir_path.clone(), active_file_id)?;
+        let old_file = DataFile::new(self.options.dir_path.clone(), active_file_id, IOType::StandardIO)?;
         older_files.insert(active_file_id, old_file);
         // 加到待 merge 的文件 id 列表中
         merge_file_ids.push(active_file_id);
@@ -132,7 +137,7 @@ impl Engine {
 
         let mut merge_files = Vec::new();
         for file_id in merge_file_ids {
-            let data_file = DataFile::new(self.options.dir_path.clone(), file_id)?;
+            let data_file = DataFile::new(self.options.dir_path.clone(), file_id, IOType::StandardIO)?;
             merge_files.push(data_file);
         }
         Ok(merge_files)
@@ -168,6 +173,12 @@ pub(crate) fn load_merge_files(dir_path: PathBuf) -> Result<()> {
                 let file_name = file_name.to_str().unwrap();
                 if file_name.ends_with(MERGE_FINISHED_FILE_NAME) {
                     merge_finished = true;
+                }
+                if file_name.ends_with(SEQUENTIAL_NUMBER_FILE_NAME) {
+                    continue;
+                }
+                if file_name.ends_with(FILE_LOCK_NAME) {
+                    continue;
                 }
                 merge_file_names.push(entry.file_name());
             }

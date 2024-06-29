@@ -7,10 +7,16 @@ pub struct Options {
     /// size of database
     pub data_file_size: u64,
     pub sync_writes: bool,
+    /// 累积到多少字节后进行持久化
+    pub(crate) bytes_per_sync: usize,
     pub index_type: IndexType,
+    // 是否用 mmap 打开数据库
+    pub mmap_at_startup: bool,
+    // 执行数据文件 merge 的阈值
+    pub merge_ratio: f32,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 pub enum IndexType {
     BTree,
     SkipList,
@@ -23,7 +29,10 @@ impl Default for Options {
             dir_path: std::env::temp_dir().join("bitcask-rust"),
             data_file_size: 256 * 1024 * 1024,
             sync_writes: false,
+            bytes_per_sync: 0,
             index_type: IndexType::BTree,
+            mmap_at_startup: true,
+            merge_ratio: 0.5,
         }
     }
 }
@@ -56,4 +65,10 @@ impl Default for WriteBatchOptions {
             sync_writes: true,
         }
     }
+}
+
+#[derive(Copy, Clone)]
+pub enum IOType {
+    StandardIO,
+    MemoryMap,
 }

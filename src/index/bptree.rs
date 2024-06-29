@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use jammdb::{DB, Error};
+use jammdb::DB;
 
 use crate::data::log_record::{decode_log_record_position, LogRecordPosition};
 use crate::index::{Indexer, IndexIterator};
@@ -29,16 +29,19 @@ impl BPlusTree {
 }
 
 impl Indexer for BPlusTree {
-    fn put(&self, key: Vec<u8>, position: LogRecordPosition) -> bool {
+    fn put(&self, key: Vec<u8>, position: LogRecordPosition) -> Option<LogRecordPosition> {
         let tx = self.bptree.tx(true).expect("failed to start a transaction");
         let bucket = tx
             .get_bucket(BPTREE_BUCKET_NAME)
             .expect("failed to get a bucket");
+        let result = bucket
+            .get_kv(&key)
+            .and_then(|pair| decode_log_record_position(pair.value().to_vec()).ok());
         bucket
             .put(key, position.encode())
             .expect("failed to put value in b+ tree");
         tx.commit().unwrap();
-        true
+        result
     }
 
     fn get(&self, key: Vec<u8>) -> Option<LogRecordPosition> {
@@ -51,18 +54,16 @@ impl Indexer for BPlusTree {
             .and_then(|data| decode_log_record_position(data.value().to_vec()).ok())
     }
 
-    fn delete(&self, key: Vec<u8>) -> bool {
+    fn delete(&self, key: Vec<u8>) -> Option<LogRecordPosition> {
         let tx = self.bptree.tx(true).expect("failed to start a transaction");
         let bucket = tx
             .get_bucket(BPTREE_BUCKET_NAME)
             .expect("failed to get a bucket");
-        if let Err(err) = bucket.delete(key) {
-            if err == Error::KeyValueMissing {
-                return false;
-            }
-        }
+        let result = bucket.delete(key).ok().and_then(|pair| {
+            decode_log_record_position(pair.value().to_vec()).ok()
+        });
         tx.commit().unwrap();
-        true
+        result
     }
 
     fn iterator(&self, options: IteratorOptions) -> Box<dyn IndexIterator> {

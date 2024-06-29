@@ -29,7 +29,10 @@ impl FileIO {
             Ok(file) => Ok(FileIO {
                 file_id: Arc::new(RwLock::new(file)),
             }),
-            Err(_) => Err(FailedToOpenDataFile),
+            Err(err) => {
+                error!("failed to open data file: {err}");
+                Err(FailedToOpenDataFile)
+            }
         }
     }
 }
@@ -58,6 +61,12 @@ impl IOManager for FileIO {
             FailedToSyncDataFile
         })?;
         Ok(())
+    }
+
+    fn size(&self) -> u64 {
+        let read_guard = self.file_id.read();
+        let metadata = read_guard.metadata().unwrap();
+        metadata.len()
     }
 }
 

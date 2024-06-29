@@ -1,38 +1,47 @@
+use std::cmp::PartialEq;
 use std::collections::HashMap;
 use std::fs;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use bytes::Bytes;
-use log::warn;
+use fs2::FileExt;
+use log::{error, warn};
 use parking_lot::{Mutex, RwLock};
+use prost::encoding::key_len;
 
 use crate::batch::{
     log_record_key_with_sequential_number, NON_TRANSACTION_SEQUENTIAL_NUMBER, parse_log_record_key,
 };
 use crate::data::data_file::{
     DATA_FILE_NAME_SUFFIX, DataFile, HINT_FILE_NAME, MERGE_FINISHED_FILE_NAME,
+    SEQUENTIAL_NUMBER_FILE_NAME,
 };
 use crate::data::log_record::{
     decode_log_record_position, LogRecord, LogRecordPosition, LogRecordType, ReadLogRecord,
     TransactionRecord,
 };
 use crate::error::Error::{
-    DataDirectoryMaybeCorrupted, DataFileSizeIsTooSmall, DirPathIsEmpty,
-    FailedToCreateDatabaseDirectory, FailedToFindDataFile, FailedToReadDataBaseDirectory,
-    FailedToUpdateIndex, KeyIsEmpty, KeyIsNotFound, ReadDataFileEof,
+    DatabaseIsUsing, DataDirectoryMaybeCorrupted, DataFileSizeIsTooSmall, DirPathIsEmpty,
+    FailedToCreateDatabaseDirectory, FailedToFindDataFile, FailedToParse,
+    FailedToReadDataBaseDirectory, FailedToUpdateIndex, FileNotExists, InvalidMergeRatio,
+    KeyIsEmpty, KeyIsNotFound, ReadDataFileEof,
 };
 use crate::error::Result;
 use crate::index::Indexer;
 use crate::index::new_indexer;
 use crate::merge::load_merge_files;
-use crate::options::{IndexType, Options};
+use crate::options::{IndexType, IOType, Options};
+use crate::utilities;
 
 #[cfg(test)]
 mod tests;
 
 const INITIAL_FILE_ID: u32 = 0;
+const SEQUENTIAL_NUMBER_KEY: &[u8] = b"sequential-number";
+pub(crate) const FILE_LOCK_NAME: &str = "flock";
 
 /// Store engine
 /// bitcask 存储引擎实例结构体
@@ -52,6 +61,29 @@ pub struct Engine {
     pub(crate) sequential_number: AtomicUsize,
     // 防止多个线程同时 merge
     pub(crate) merging_lock: Mutex<()>,
+    // 是否存在存储事务序列号的文件
+    pub(crate) sequential_number_file_exists: bool,
+    // 是否是第一次初始化该目录
+    pub(crate) is_initial: bool,
+    // 文件锁保证只有一个数据库实例在数据目录上被打开
+    lock_file: File,
+    // 累计写入了多少字节
+    bytes: Arc<AtomicUsize>,
+    // 累计有多少空间可以 merge
+    pub(crate) reclaim_size: Arc<AtomicU64>,
+}
+
+/// 统计存储引擎的相关信息
+#[derive(Debug)]
+pub struct Statistics {
+    // key 的总数量
+    pub(crate) key_count: usize,
+    // 数据文件的总数量
+    pub(crate) data_file_count: usize,
+    // 可以回收的数据量
+    pub(crate) reclaim_size: u64,
+    // 数据目录占据的磁盘空间的大小
+    pub(crate) disk_size: usize,
 }
 
 impl Engine {
@@ -62,18 +94,35 @@ impl Engine {
         // let options:
         // 判断数据目录是否存在，如果不存在的话，则创建目录
         let dir_path = options.dir_path.as_path();
-        if !dir_path.is_dir() {
+        let is_initial = if !dir_path.is_dir() {
             fs::create_dir_all(dir_path).map_err(|err| {
                 warn!("failed to create the database directory: {}", err);
                 FailedToCreateDatabaseDirectory
             })?;
-        }
+            true
+        } else if fs::read_dir(dir_path).unwrap().count() == 0 {
+            true
+        } else {
+            false
+        };
+
+        // 判断数据目录是否已经被使用过
+        let lock_file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(dir_path.join(FILE_LOCK_NAME))
+            .unwrap();
+        lock_file.try_lock_exclusive().map_err(|err| {
+            warn!("database is using: {err}");
+            DatabaseIsUsing
+        })?;
 
         // 加载 merge 数据目录
         load_merge_files(PathBuf::from(dir_path))?;
 
         // 加载数据文件
-        let mut data_files = load_data_files(dir_path)?;
+        let mut data_files = load_data_files(dir_path, options.mmap_at_startup)?;
         // 设置 file id 信息
         let file_ids = data_files
             .iter()
@@ -93,7 +142,7 @@ impl Engine {
         }
         let active_file = match data_files.pop() {
             Some(data_file) => data_file,
-            None => DataFile::new(PathBuf::from(dir_path), INITIAL_FILE_ID)?,
+            None => DataFile::new(PathBuf::from(dir_path), INITIAL_FILE_ID, IOType::StandardIO)?,
         };
 
         let index_type = options.index_type.clone();
@@ -107,10 +156,15 @@ impl Engine {
             batch_commit_lock: Mutex::new(()),
             sequential_number: AtomicUsize::new(1),
             merging_lock: Mutex::new(()),
+            sequential_number_file_exists: false,
+            is_initial,
+            lock_file,
+            bytes: Arc::new(AtomicUsize::new(0)),
+            reclaim_size: Arc::new(AtomicU64::new(0)),
         };
 
         // B+ 树不需要从数据文件中加载索引
-        if let IndexType::BPlusTree = index_type {
+        if IndexType::BPlusTree != index_type {
             // 从 hint 文件加载索引
             engine.load_index_from_hint_file()?;
 
@@ -119,9 +173,36 @@ impl Engine {
             engine
                 .sequential_number
                 .store(current_sequential_number + 1, Ordering::SeqCst);
+        } else {
+            // 加载事务序列号
+            if let Ok(sequential_number) = engine.load_sequential_number() {
+                engine
+                    .sequential_number
+                    .store(sequential_number, Ordering::SeqCst);
+                engine.sequential_number_file_exists = true;
+            }
+
+            // 设置当前活跃文件的数据偏移
+            let active_file = engine.active_file.write();
+            // why don't use file size directly instead of using write_offset?
+            active_file.set_write_offset(active_file.get_file_size());
+        }
+        // 重置 IO 类型
+        if engine.options.mmap_at_startup {
+            engine.reset_io_type()?;
         }
 
         Ok(engine)
+    }
+
+    fn reset_io_type(&self) -> Result<()> {
+        let mut active_file = self.active_file.write();
+        active_file.set_io_manager(self.options.dir_path.clone(), IOType::StandardIO)?;
+        let mut older_files = self.older_files.write();
+        for (_, data_file) in older_files.iter_mut() {
+            data_file.set_io_manager(self.options.dir_path.clone(), IOType::StandardIO)?;
+        }
+        Ok(())
     }
 
     /// 存储 key/value 数据，key 不能为空
@@ -142,12 +223,13 @@ impl Engine {
 
             // 追加写到活跃数据文件中
             let log_record_position = self.append_log_record(&mut record)?;
-            let update_success = self.index.put(key.to_vec(), log_record_position);
-            if update_success {
-                Ok(())
-            } else {
-                Err(FailedToUpdateIndex)
-            }
+            self.index
+                .put(key.to_vec(), log_record_position)
+                .map(|LogRecordPosition { size, .. }| {
+                    self.reclaim_size.fetch_add(size, Ordering::SeqCst);
+                    ()
+                })
+                .ok_or(FailedToUpdateIndex)
         }
     }
 
@@ -168,12 +250,13 @@ impl Engine {
                     record_type: LogRecordType::DELETED,
                 };
                 self.append_log_record(&mut log_record)?;
-                let delete_success = self.index.delete(key.to_vec());
-                if !delete_success {
-                    Err(FailedToUpdateIndex)
-                } else {
-                    Ok(())
-                }
+                self.index
+                    .delete(key.to_vec())
+                    .map(|LogRecordPosition { size, .. }| {
+                        self.reclaim_size.fetch_add(size, Ordering::SeqCst);
+                        ()
+                    })
+                    .ok_or(FailedToUpdateIndex)
             }
         }
     }
@@ -229,10 +312,11 @@ impl Engine {
             let current_fid = active_file.get_file_id();
             // 将旧的数据文件存储到 map 中
             let mut older_files = self.older_files.write();
-            let old_file = DataFile::new(PathBuf::from(dir_path), current_fid)?;
+            let old_file = DataFile::new(PathBuf::from(dir_path), current_fid, IOType::StandardIO)?;
             older_files.insert(current_fid, old_file);
             // 打开新的数据文件
-            let new_file = DataFile::new(PathBuf::from(dir_path), current_fid + 1)?;
+            let new_file =
+                DataFile::new(PathBuf::from(dir_path), current_fid + 1, IOType::StandardIO)?;
             *active_file = new_file;
         }
 
@@ -241,13 +325,19 @@ impl Engine {
         active_file.write(&encoded_record)?;
 
         // 根据配置项决定是否持久化
-        if self.options.sync_writes {
+        let previous = self.bytes.fetch_add(encoded_record.len(), Ordering::SeqCst);
+        let need_sync = self.options.sync_writes
+            || previous + encoded_record.len() > self.options.bytes_per_sync;
+
+        if need_sync {
             active_file.sync()?;
+            self.bytes.store(0, Ordering::SeqCst);
         }
         // 构造内存索引信息
         Ok(LogRecordPosition {
             file_id: active_file.get_file_id(),
             offset: write_offset,
+            size: record_len,
         })
     }
 
@@ -284,8 +374,7 @@ impl Engine {
                 // if smallest_non_merge_file_id
                 //     .map(|smallest_non_merge_file_id| *file_id < smallest_non_merge_file_id)
                 //     .unwrap_or_default()
-                if Some(*file_id) < smallest_non_merge_file_id
-                {
+                if Some(*file_id) < smallest_non_merge_file_id {
                     continue;
                 }
 
@@ -307,6 +396,7 @@ impl Engine {
                     let log_record_position = LogRecordPosition {
                         file_id: *file_id,
                         offset,
+                        size,
                     };
 
                     // 解析 key，拿到实际的 key 和 sequential number
@@ -360,10 +450,7 @@ impl Engine {
             let hint_file = DataFile::new_hint_file(self.options.dir_path.clone())?;
             let mut offset = 0;
             loop {
-                let ReadLogRecord {
-                    log_record,
-                    size,
-                } = match hint_file.read_log_record(offset) {
+                let ReadLogRecord { log_record, size } = match hint_file.read_log_record(offset) {
                     Ok(result) => result,
                     Err(err) if err == ReadDataFileEof => break,
                     Err(err) => return Err(err),
@@ -386,18 +473,43 @@ impl Engine {
         log_record_position: LogRecordPosition,
     ) -> Result<()> {
         let update_success = match record_type {
-            LogRecordType::NORMAL => self.index.put(key.to_vec(), log_record_position),
-            LogRecordType::DELETED => self.index.delete(key.to_vec()),
-            LogRecordType::TxnFINISHED => false,
+            LogRecordType::NORMAL => self.index.put(key.to_vec(), log_record_position).map(
+                |LogRecordPosition { size, .. }| {
+                    self.reclaim_size.fetch_add(size, Ordering::SeqCst);
+                },
+            ),
+            LogRecordType::DELETED => {
+                self.index
+                    .delete(key.to_vec())
+                    .map(|LogRecordPosition { size, .. }| {
+                        self.reclaim_size.fetch_add(size, Ordering::SeqCst);
+                    })
+            }
+            LogRecordType::TxnFINISHED => None,
         };
-        if !update_success {
-            return Err(FailedToUpdateIndex);
-        }
-        Ok(())
+        update_success.ok_or(FailedToUpdateIndex)
     }
 
     /// 关闭数据库，释放相关资源
-    pub fn close(self) -> Result<()> {
+    pub fn close(&self) -> Result<()> {
+        // 如果数据目录不存在则直接返回（测试时会出现的情况）
+        if !self.options.dir_path.is_dir() {
+            return Ok(());
+        }
+
+        let sequential_number_file =
+            DataFile::new_sequential_number_file(self.options.dir_path.clone())?;
+        let sequential_number = self.sequential_number.load(Ordering::SeqCst);
+        let record = LogRecord {
+            key: SEQUENTIAL_NUMBER_KEY.to_vec(),
+            value: sequential_number.to_string().into_bytes(),
+            record_type: LogRecordType::NORMAL,
+        };
+        sequential_number_file.write(&record.encode())?;
+        sequential_number_file.sync()?;
+
+        // 释放文件锁
+        self.lock_file.unlock().unwrap();
         self.sync()
     }
 
@@ -405,6 +517,46 @@ impl Engine {
     pub fn sync(&self) -> Result<()> {
         let read_guard = self.active_file.read();
         read_guard.sync()
+    }
+
+    // B+ 树索引模式下加载事务序列号
+    fn load_sequential_number(&self) -> Result<usize> {
+        let file_name = self.options.dir_path.join(SEQUENTIAL_NUMBER_FILE_NAME);
+        if !file_name.is_file() {
+            Err(FileNotExists)
+        } else {
+            let data_file = DataFile::new_sequential_number_file(self.options.dir_path.clone())?;
+            let ReadLogRecord { log_record, .. } = data_file.read_log_record(0).map_err(|err| {
+                error!("failed to read sequential number: {err}");
+                err
+            })?;
+            // 加载后删除文件，避免追加写入
+            fs::remove_file(file_name).unwrap();
+            let value = String::from_utf8(log_record.value).unwrap();
+            value.parse::<usize>().map_err(|err| {
+                error!("parse failed: {err}");
+                FailedToParse
+            })
+        }
+    }
+
+    /// 获取数据库统计信息
+    pub(crate) fn statistics(&self) -> Result<Statistics> {
+        Ok(Statistics {
+            key_count: self.list_keys()?.len(),
+            data_file_count: self.older_files.read().len() + 1,
+            reclaim_size: self.reclaim_size.load(Ordering::SeqCst),
+            // disk_size: utilities::file::dir_disk_size(self.options.dir_path.clone())?,
+            disk_size: todo!(),
+        })
+    }
+}
+
+impl Drop for Engine {
+    fn drop(&mut self) {
+        if let Err(err) = self.close() {
+            log::error!("error while close engin: {err}")
+        }
     }
 }
 
@@ -414,12 +566,14 @@ fn check_options(options: &Options) -> Result<()> {
         Err(DirPathIsEmpty)
     } else if options.data_file_size <= 0 {
         Err(DataFileSizeIsTooSmall)
+    } else if (0_f32..=1_f32).contains(&options.merge_ratio) {
+        Err(InvalidMergeRatio)
     } else {
         Ok(())
     }
 }
 
-fn load_data_files(dir_path: &Path) -> Result<Vec<DataFile>> {
+fn load_data_files(dir_path: &Path, need_mmap: bool) -> Result<Vec<DataFile>> {
     // 读取数据目录
     let dir = fs::read_dir(dir_path).map_err(|_| FailedToReadDataBaseDirectory)?;
 
@@ -449,9 +603,12 @@ fn load_data_files(dir_path: &Path) -> Result<Vec<DataFile>> {
     file_ids.sort();
     // 遍历所有文件 id，依次打开对应的数据文件
     for file_id in file_ids {
-        data_files.push(DataFile::new(PathBuf::from(dir_path), file_id)?);
+        let io_type = if need_mmap {
+            IOType::MemoryMap
+        } else {
+            IOType::StandardIO
+        };
+        data_files.push(DataFile::new(PathBuf::from(dir_path), file_id, io_type)?);
     }
     Ok(data_files)
 }
-
-

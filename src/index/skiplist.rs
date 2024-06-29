@@ -21,21 +21,26 @@ impl SkipList {
 }
 
 impl Indexer for SkipList {
-    fn put(&self, key: Vec<u8>, position: LogRecordPosition) -> bool {
+    fn put(&self, key: Vec<u8>, position: LogRecordPosition) -> Option<LogRecordPosition> {
+        // let result = self.skip_map.get(&key).map(|entry| *entry.value());
+        // let result = self.skip_map.entry(&key).map(|entry| *entry.value());
+
+        let result = self.skip_map.get(&key).map(|entry| *entry.value());
         self.skip_map.insert(key, position);
-        true
+        result
     }
 
     fn get(&self, key: Vec<u8>) -> Option<LogRecordPosition> {
         self.skip_map.get(&key).map(|entry| *entry.value())
     }
 
-    fn delete(&self, key: Vec<u8>) -> bool {
-        self.skip_map.remove(&key).is_some()
+    fn delete(&self, key: Vec<u8>) -> Option<LogRecordPosition> {
+        self.skip_map.remove(&key).map(|entry| *entry.value())
     }
 
     fn iterator(&self, options: IteratorOptions) -> Box<dyn IndexIterator> {
-        let mut items: Vec<_> = self.skip_map
+        let mut items: Vec<_> = self
+            .skip_map
             .iter()
             .map(|item| (item.key().clone(), item.value().clone()))
             .collect();
@@ -50,13 +55,13 @@ impl Indexer for SkipList {
     }
 
     fn list_keys(&self) -> crate::error::Result<Vec<Bytes>> {
-        Ok(self.skip_map
+        Ok(self
+            .skip_map
             .iter()
             .map(|entry| Bytes::copy_from_slice(entry.key()))
             .collect())
     }
 }
-
 
 // SkipList 索引迭代器
 // pub struct SkipListIterator {
@@ -97,4 +102,3 @@ impl Indexer for SkipList {
 //         }
 //     }
 // }
-

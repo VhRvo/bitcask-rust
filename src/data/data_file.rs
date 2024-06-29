@@ -13,10 +13,12 @@ use crate::error::Error::{InvalidRecordCrc, ReadDataFileEof};
 use crate::error::Result;
 use crate::fio;
 use crate::fio::new_io_manager;
+use crate::options::IOType;
 
 pub(crate) const DATA_FILE_NAME_SUFFIX: &str = ".data";
 pub(crate) const HINT_FILE_NAME: &str = "hint-index";
 pub(crate) const MERGE_FINISHED_FILE_NAME: &str = "merge-finished";
+pub(crate) const SEQUENTIAL_NUMBER_FILE_NAME: &str = "sequential-number";
 
 /// 数据文件
 pub struct DataFile {
@@ -29,16 +31,16 @@ pub struct DataFile {
 
 impl DataFile {
     /// 创建或打开一个新的数据文件
-    pub fn new(dir_path: PathBuf, file_id: u32) -> Result<DataFile> {
+    pub fn new(dir_path: PathBuf, file_id: u32, io_type: IOType) -> Result<DataFile> {
         // 根据 path 和 id 构造出完成的文件名称
         let file_name = get_data_file_name(dir_path, file_id);
         // 初始化 IOManager
-        let io_manager = new_io_manager(file_name)?;
+        let io_manager = new_io_manager(file_name, io_type)?;
 
         Ok(DataFile {
             file_id: Arc::new(RwLock::new(file_id)),
             write_offset: Arc::new(RwLock::new(0)),
-            io_manager: Box::new(io_manager),
+            io_manager,
         })
     }
 
@@ -46,12 +48,12 @@ impl DataFile {
         // 根据 path 和 id 构造出完成的文件名称
         let file_name = dir_path.join(HINT_FILE_NAME);
         // 初始化 IOManager
-        let io_manager = new_io_manager(file_name)?;
+        let io_manager = new_io_manager(file_name, IOType::StandardIO)?;
 
         Ok(DataFile {
             file_id: Arc::new(RwLock::new(0)),
             write_offset: Arc::new(RwLock::new(0)),
-            io_manager: Box::new(io_manager),
+            io_manager,
         })
     }
 
@@ -59,13 +61,30 @@ impl DataFile {
         // 根据 path 和 id 构造出完成的文件名称
         let file_name = dir_path.join(MERGE_FINISHED_FILE_NAME);
         // 初始化 IOManager
-        let io_manager = new_io_manager(file_name)?;
+        let io_manager = new_io_manager(file_name, IOType::StandardIO)?;
 
         Ok(DataFile {
             file_id: Arc::new(RwLock::new(0)),
             write_offset: Arc::new(RwLock::new(0)),
-            io_manager: Box::new(io_manager),
+            io_manager,
         })
+    }
+
+    pub fn new_sequential_number_file(dir_path: PathBuf) -> Result<DataFile> {
+        // 根据 path 和 id 构造出完成的文件名称
+        let file_name = dir_path.join(SEQUENTIAL_NUMBER_FILE_NAME);
+        // 初始化 IOManager
+        let io_manager = new_io_manager(file_name, IOType::StandardIO)?;
+
+        Ok(DataFile {
+            file_id: Arc::new(RwLock::new(0)),
+            write_offset: Arc::new(RwLock::new(0)),
+            io_manager,
+        })
+    }
+
+    pub fn get_file_size(&self) -> u64 {
+        self.io_manager.size()
     }
 
     pub fn get_write_offset(&self) -> u64 {
@@ -151,6 +170,11 @@ impl DataFile {
         Ok(())
     }
 
+    pub fn set_io_manager(&mut self, dir_path: PathBuf, io_type: IOType) -> Result<()> {
+        self.io_manager = new_io_manager(get_data_file_name(dir_path, self.get_file_id()), io_type)?;
+        Ok(())
+    }
+
     pub fn sync(&self) -> Result<()> {
         self.io_manager.sync()
     }
@@ -174,7 +198,7 @@ mod tests {
         println!("temp directory: {:?}", dir_path.as_os_str());
 
         let insert = |file_id| {
-            let data_file_result = DataFile::new(dir_path.clone(), file_id);
+            let data_file_result = DataFile::new(dir_path.clone(), file_id, IOType::StandardIO);
             assert!(data_file_result.is_ok());
             let data_file = data_file_result.unwrap();
             assert_eq!(data_file.get_file_id(), file_id);
@@ -188,7 +212,7 @@ mod tests {
     fn test_data_file_write() {
         let dir_path = std::env::temp_dir();
         println!("temp directory: {:?}", dir_path.as_os_str());
-        let data_file_result = DataFile::new(dir_path.clone(), 100);
+        let data_file_result = DataFile::new(dir_path.clone(), 100, IOType::StandardIO);
         assert!(data_file_result.is_ok());
         let data_file = data_file_result.unwrap();
         assert_eq!(data_file.get_file_id(), 100);
@@ -207,7 +231,7 @@ mod tests {
     fn test_data_file_sync() {
         let dir_path = std::env::temp_dir();
         println!("temp directory: {:?}", dir_path.as_os_str());
-        let data_file_result = DataFile::new(dir_path.clone(), 200);
+        let data_file_result = DataFile::new(dir_path.clone(), 200, IOType::StandardIO);
         assert!(data_file_result.is_ok());
         let data_file = data_file_result.unwrap();
         assert_eq!(data_file.get_file_id(), 200);
@@ -220,7 +244,7 @@ mod tests {
     fn test_data_file_read_log_record() {
         let dir_path = std::env::temp_dir();
         println!("temp directory: {:?}", dir_path.as_os_str());
-        let data_file_result = DataFile::new(dir_path.clone(), 800);
+        let data_file_result = DataFile::new(dir_path.clone(), 800, IOType::StandardIO);
         assert!(data_file_result.is_ok());
         let data_file = data_file_result.unwrap();
         assert_eq!(data_file.get_file_id(), 800);
